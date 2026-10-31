@@ -84,6 +84,10 @@ expect_fail "a copy of the api pin anywhere in demo" 4 \
   "line=\$(grep -oE '${pin}' common/services.yaml); printf '# %s\\n' \"\$line\" >>demo/compose.yaml"
 expect_fail "an admin token config inside /run/pulse" 8 \
   "sed -i 's#target: /run/pulse-admin/admin-tokens.json#target: /run/pulse/admin-tokens.json#' e2e/compose.e2e.yaml"
+expect_fail "a service-level tmpfs at /run/pulse on console in full" 8 \
+  "sed -i '/service: console }/a\\    tmpfs: [\"/run/pulse\"]' full/compose.yaml"
+expect_fail "a service-level tmpfs below /run/pulse with options in full" 8 \
+  "sed -i '/service: console }/a\\    tmpfs: \"/run/pulse/x:size=1m\"' full/compose.yaml"
 expect_fail "secrets/ not ignored" 6 \
   "sed -i '/^secrets\\/\$/d' .gitignore"
 expect_fail "a floating bun tag in flow form" 2 \

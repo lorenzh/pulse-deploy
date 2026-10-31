@@ -113,7 +113,10 @@ for setup in $setups e2e; do
       | "\($s) volume \(.source // "-") -> \(.target)"),
     (((.configs // []) + (.secrets // []))[] | (.target // "") as $t
       | select($t == "/run/pulse" or ($t | startswith("/run/pulse/")))
-      | "\($s) config/secret \(.source) -> \($t)")' <<<"$json")
+      | "\($s) config/secret \(.source) -> \($t)"),
+    ((.tmpfs // []) | if type == "array" then .[] else . end | tostring | sub(":.*$"; "")
+      | select(. == "/run/pulse" or startswith("/run/pulse/"))
+      | "\($s) tmpfs -> \(.)")' <<<"$json")
   [[ -z "$bad" ]] || fail "rule 8: ${setup} mounts under /run/pulse:"$'\n'"$bad"
 done
 ok "rule 5: the published ports of minimal, full, demo, dev and e2e equal the table"

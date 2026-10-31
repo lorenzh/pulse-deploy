@@ -39,10 +39,17 @@ dc() { docker compose -f "$compose_file" "$@"; }
 
 container_of() { dc ps --all -q "$1" 2>/dev/null | head -n 1; }
 
-readyz_ok() { # readyz_ok <service> <port>
-  local body
-  body=$(dc exec -T "$1" bun -e \
-    "fetch('http://127.0.0.1:$2/readyz').then(async (r) => { process.stdout.write(await r.text()); process.exit(r.status === 200 ? 0 : 1); }, () => process.exit(1))" \
+remaining() { # whole seconds left before the deadline, at least 1
+  local left=$((deadline - SECONDS))
+  ((left > 0)) || left=1
+  printf '%s' "$left"
+}
+
+readyz_ok() { # readyz_ok <service> <port>: bounded by the deadline, request and body read included
+  local body left
+  left=$(remaining)
+  body=$(timeout -k 1 "$left" docker compose -f "$compose_file" exec -T "$1" bun -e \
+    "fetch('http://127.0.0.1:$2/readyz', { signal: AbortSignal.timeout(${left}000) }).then(async (r) => { process.stdout.write(await r.text()); process.exit(r.status === 200 ? 0 : 1); }, () => process.exit(1))" \
     2>/dev/null) || return 1
   [[ "$body" == "ok" ]]
 }
@@ -75,7 +82,7 @@ mailpit_ok() { # the published port as Compose resolves it, so a port set in .en
   local addr
   addr=$(dc port mailpit 8025 2>/dev/null | head -n 1) || return 1
   [[ "$addr" =~ ^127\.0\.0\.1:[0-9]+$ ]] || return 1
-  [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://${addr}/readyz")" == "200" ]]
+  [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time "$(remaining)" "http://${addr}/readyz")" == "200" ]]
 }
 
 elapsed() { awk -v s="$started" -v e="$(date +%s.%N)" 'BEGIN { printf "%.1f", e - s }'; }
