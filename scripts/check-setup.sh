@@ -122,6 +122,16 @@ ok "rule 10: no service in common, a setup or e2e sets profiles"
 ok "rule 9: no setup sets network_mode other than none"
 ok "rule 2: every image the setups resolve is a digest pin (dev: or pulse-<svc>:dev)"
 
+# 11. No committed file that Compose loads on its own sits next to a compose file: plain
+#     `docker compose` inside a setup reads compose.override.yaml, which the checks above never
+#     see. A local, gitignored override is the user's own and is not checked.
+if out=$(git ls-files -co --exclude-standard |
+  grep -E '^([^/]+/)?(docker-)?compose(\.override)?\.ya?ml$' |
+  grep -vxE '(minimal|full|demo|dev)/compose\.yaml|e2e/compose\.e2e\.yaml'); then
+  fail "rule 11: Compose loads these files on its own, but they are not checked:"$'\n'"$out"
+fi
+ok "rule 11: no committed override or second compose file in the root, common, a setup or e2e"
+
 # 6. Host secrets are never committed.
 git check-ignore -q secrets/probe-token || fail "rule 6: secrets/ is not ignored by .gitignore"
 ok "rule 6: secrets/ is ignored"

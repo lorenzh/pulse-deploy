@@ -102,6 +102,13 @@ expect_fail "a profiled floating image in common" 10 \
   "printf '%s\\n' '  bun-latest: { image: \"oven/bun:latest\", profiles: [debug] }' >>common/services.yaml"
 expect_fail "a profiled host-network service in full" 10 \
   "sed -i '/service: console }/a\\    profiles: [debug]\\n    network_mode: host' full/compose.yaml"
+expect_fail "a committed override that publishes the api in full" 11 \
+  "printf 'services:\\n  api:\\n    ports: [\"3000:3000\"]\\n' >full/compose.override.yaml \\
+   && git add -f full/compose.override.yaml"
+expect_fail "a docker-compose.override.yml in e2e" 11 \
+  "printf 'services: {}\\n' >e2e/docker-compose.override.yml"
+expect_pass "a local, gitignored override in full" \
+  "printf 'services: {}\\n' >full/compose.override.yaml"
 expect_pass "a valid bump that changes only common/services.yaml" \
   "sed -i -E 's#(ghcr\\.io/lorenzh/pulse-api):[0-9.]+@sha256:[0-9a-f]{64}#\\1:0.1.1@sha256:${digest_a}#' common/services.yaml"
 

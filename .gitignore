@@ -3,3 +3,5 @@ secrets/
 */.env
 e2e/.secrets/
 e2e/rw/
+*/compose.override.yaml
+*/compose.override.yml

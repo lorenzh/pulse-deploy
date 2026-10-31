@@ -101,4 +101,4 @@ services:
           create_host_path: false
 ```
 
-Compose loads `compose.override.yaml` on its own only without `-f`, so start with `cd full && docker compose up -d`, or with `docker compose -f full/compose.yaml -f full/compose.override.yaml up -d`. Read the token with `sudo cat secrets/admin/admin-tokens.json`. The file format is in the [pulse-api configuration docs](https://github.com/lorenzh/pulse-api/blob/main/docs/configuration.md#admin-tokensjson).
+Compose loads `compose.override.yaml` on its own only without `-f`, so start with `cd full && docker compose up -d`, or with `docker compose -f full/compose.yaml -f full/compose.override.yaml up -d`. Read the token with `sudo cat secrets/admin/admin-tokens.json`. The file format is in the [pulse-api configuration docs](https://github.com/lorenzh/pulse-api/blob/main/docs/configuration.md#admin-tokensjson). The file is gitignored: `scripts/check-setup.sh` (rule 11) fails when an override is committed, because the static checks never read it.
