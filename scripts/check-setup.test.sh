@@ -86,6 +86,16 @@ expect_fail "an admin token config inside /run/pulse" 8 \
   "sed -i 's#target: /run/pulse-admin/admin-tokens.json#target: /run/pulse/admin-tokens.json#' e2e/compose.e2e.yaml"
 expect_fail "secrets/ not ignored" 6 \
   "sed -i '/^secrets\\/\$/d' .gitignore"
+expect_fail "a floating bun tag in flow form" 2 \
+  "sed -i -E 's#^  bun-tools:\$#  bun-tools: { image: \"oven/bun:latest\" }\\n  bun-tools-old:#' common/services.yaml"
+expect_fail "a floating bun tag with a quoted key" 2 \
+  "sed -i -E 's#^(    )image: oven/bun:.*#\\1\"image\": oven/bun:latest#' common/services.yaml"
+expect_fail "a second api pin in flow form" 2 \
+  "line=\$(grep -oE '${pin}' common/services.yaml); printf '  api2: { image: \"%s\" }\\n' \"\$line\" >>common/services.yaml"
+expect_fail "host networking for the api in full" 9 \
+  "sed -i '/service: api }/a\\    network_mode: host' full/compose.yaml"
+expect_fail "host networking for console in full" 9 \
+  "sed -i '/service: console }/a\\    network_mode: host' full/compose.yaml"
 expect_pass "a valid bump that changes only common/services.yaml" \
   "sed -i -E 's#(ghcr\\.io/lorenzh/pulse-api):[0-9.]+@sha256:[0-9a-f]{64}#\\1:0.1.1@sha256:${digest_a}#' common/services.yaml"
 

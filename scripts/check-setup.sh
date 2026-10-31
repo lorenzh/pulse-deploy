@@ -28,14 +28,21 @@ ok "rule 1: no build: or git# in common, minimal, full or demo"
 #    pinned by digest.
 pulse_re='^ghcr\.io/lorenzh/pulse-(api|probe|status|notify|console):[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$'
 third_re='^(oven/bun|alpine/openssl|axllent/mailpit)(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$'
-images=$(sed -nE 's/^[[:space:]]*image:[[:space:]]*//p' common/services.yaml | sed -E 's/[[:space:]]+$//; s/^"(.*)"$/\1/')
-[[ -n "$images" ]] || fail "rule 2: common/services.yaml has no image"
+#    The images come from the config that Compose resolves, so no YAML form (flow mapping, quoted
+#    key) can hide one. The text parse must find the same set, else a form is not checked.
+resolved=$(config_json -f common/services.yaml | jq -r '.services[] | .image // "<none>"' | sort -u) ||
+  fail "rule 2: docker compose config failed for common/services.yaml"
+images=$(sed -nE 's/^[[:space:]]*image:[[:space:]]*//p' common/services.yaml | sed -E 's/[[:space:]]+$//; s/^"(.*)"$/\1/' | sort -u)
+[[ -n "$resolved" ]] || fail "rule 2: common/services.yaml has no image"
 while read -r image; do
   [[ "$image" =~ $pulse_re || "$image" =~ $third_re ]] ||
     fail "rule 2: image ${image} is not <approved name>[:<tag>]@sha256:<64 hex> (pulse images need x.y.z)"
-done <<<"$images"
+done <<<"$resolved"
+[[ "$images" == "$resolved" ]] ||
+  fail "rule 2: common/services.yaml sets an image in a form other than a plain image: line"
 for svc in api probe status notify console; do
-  count=$(grep -cE "^ghcr\.io/lorenzh/pulse-${svc}:" <<<"$images" || true)
+  # Counted in the file text, so a second line in any YAML form counts too.
+  count=$(grep -oE "ghcr\.io/lorenzh/pulse-${svc}[:@]" common/services.yaml | wc -l)
   [[ "$count" == "1" ]] || fail "rule 2: pulse-${svc} is pinned ${count} times in common/services.yaml"
 done
 ok "rule 2: every image in common/services.yaml is pinned by digest, each pulse image once"
@@ -79,6 +86,16 @@ for setup in $setups e2e; do
   expected=$(expected_ports "$setup" | sort)
   [[ "$actual" == "$expected" ]] ||
     fail "rule 5: ${setup} publishes:"$'\n'"${actual:-nothing}"$'\n'"expected:"$'\n'"${expected}"
+  # 2. Every image a setup resolves is a pin of common/services.yaml (dev: also pulse-<svc>:dev).
+  while read -r image; do
+    [[ "$image" =~ $pulse_re || "$image" =~ $third_re ]] && continue
+    [[ "$setup" == dev && "$image" =~ ^pulse-(api|probe|status|notify|console):dev$ ]] && continue
+    fail "rule 2: ${setup} resolves image ${image}, which is not a digest pin"
+  done < <(jq -r '.services[] | .image // "<none>"' <<<"$json")
+  # 9. No host or shared network namespace: it would expose ports that rule 5 cannot see.
+  bad=$(jq -r '.services | to_entries[] | select((.value.network_mode // "none") != "none")
+    | "\(.key) network_mode \(.value.network_mode)"' <<<"$json")
+  [[ -z "$bad" ]] || fail "rule 9: ${setup} sets a network_mode other than none:"$'\n'"$bad"
   # 8. Only the secrets volume, mounted exactly at /run/pulse, may target /run/pulse or below.
   bad=$(jq -r '.services | to_entries[] | .key as $s | .value |
     ((.volumes // [])[] | select(.target == "/run/pulse" or (.target | startswith("/run/pulse/")))
@@ -91,6 +108,8 @@ for setup in $setups e2e; do
 done
 ok "rule 5: the published ports of minimal, full, demo, dev and e2e equal the table"
 ok "rule 8: only a secrets volume is mounted at /run/pulse, nothing below it"
+ok "rule 9: no setup sets network_mode other than none"
+ok "rule 2: every image the setups resolve is a digest pin (dev: or pulse-<svc>:dev)"
 
 # 6. Host secrets are never committed.
 git check-ignore -q secrets/probe-token || fail "rule 6: secrets/ is not ignored by .gitignore"
