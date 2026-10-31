@@ -16,7 +16,14 @@ ok() { printf 'ok: %s\n' "$*"; }
 unset PULSE_API_PORT PULSE_STATUS_PORT PULSE_CONSOLE_PORT PULSE_MAILPIT_PORT PULSE_SECRETS_DIR PULSE_SRC_DIR
 unset COMPOSE_PROJECT_NAME COMPOSE_FILE
 
-config_json() { docker compose "$@" config --format json; }
+# --profile '*' resolves every service, also one under a profile, so no service skips a rule.
+config_json() { docker compose --profile '*' "$@" config --format json; }
+# 10. No service sets profiles: a profiled service starts only on request and hides from review.
+no_profiles() { # no_profiles <name> <config json>
+  local bad
+  bad=$(jq -r '.services | to_entries[] | select((.value.profiles // []) != []) | .key' <<<"$2")
+  [[ -z "$bad" ]] || fail "rule 10: ${1} has services with profiles:"$'\n'"$bad"
+}
 
 # 1. Only dev builds.
 if out=$(grep -rnE 'build:|git#' common minimal full demo); then
@@ -30,8 +37,10 @@ pulse_re='^ghcr\.io/lorenzh/pulse-(api|probe|status|notify|console):[0-9]+\.[0-9
 third_re='^(oven/bun|alpine/openssl|axllent/mailpit)(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$'
 #    The images come from the config that Compose resolves, so no YAML form (flow mapping, quoted
 #    key) can hide one. The text parse must find the same set, else a form is not checked.
-resolved=$(config_json -f common/services.yaml | jq -r '.services[] | .image // "<none>"' | sort -u) ||
+common_json=$(config_json -f common/services.yaml) ||
   fail "rule 2: docker compose config failed for common/services.yaml"
+no_profiles common/services.yaml "$common_json"
+resolved=$(jq -r '.services[] | .image // "<none>"' <<<"$common_json" | sort -u)
 images=$(sed -nE 's/^[[:space:]]*image:[[:space:]]*//p' common/services.yaml | sed -E 's/[[:space:]]+$//; s/^"(.*)"$/\1/' | sort -u)
 [[ -n "$resolved" ]] || fail "rule 2: common/services.yaml has no image"
 while read -r image; do
@@ -81,6 +90,7 @@ compose_args() {
 for setup in $setups e2e; do
   mapfile -t args < <(compose_args "$setup")
   json=$(config_json "${args[@]}") || fail "rule 5: docker compose config failed for ${setup}"
+  no_profiles "$setup" "$json"
   actual=$(jq -r '.services | to_entries[] | .key as $s | (.value.ports // [])[] |
     "\($s) \(if (.host_ip // "") == "" then "-" else .host_ip end) \(.published // "-") \(.target)"' <<<"$json" | sort)
   expected=$(expected_ports "$setup" | sort)
@@ -108,6 +118,7 @@ for setup in $setups e2e; do
 done
 ok "rule 5: the published ports of minimal, full, demo, dev and e2e equal the table"
 ok "rule 8: only a secrets volume is mounted at /run/pulse, nothing below it"
+ok "rule 10: no service in common, a setup or e2e sets profiles"
 ok "rule 9: no setup sets network_mode other than none"
 ok "rule 2: every image the setups resolve is a digest pin (dev: or pulse-<svc>:dev)"
 

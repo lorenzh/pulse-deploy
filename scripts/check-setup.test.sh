@@ -96,6 +96,12 @@ expect_fail "host networking for the api in full" 9 \
   "sed -i '/service: api }/a\\    network_mode: host' full/compose.yaml"
 expect_fail "host networking for console in full" 9 \
   "sed -i '/service: console }/a\\    network_mode: host' full/compose.yaml"
+expect_fail "a profiled api with a published port in full" 10 \
+  "sed -i '/service: api }/a\\    profiles: [debug]' full/compose.yaml"
+expect_fail "a profiled floating image in common" 10 \
+  "printf '%s\\n' '  bun-latest: { image: \"oven/bun:latest\", profiles: [debug] }' >>common/services.yaml"
+expect_fail "a profiled host-network service in full" 10 \
+  "sed -i '/service: console }/a\\    profiles: [debug]\\n    network_mode: host' full/compose.yaml"
 expect_pass "a valid bump that changes only common/services.yaml" \
   "sed -i -E 's#(ghcr\\.io/lorenzh/pulse-api):[0-9.]+@sha256:[0-9a-f]{64}#\\1:0.1.1@sha256:${digest_a}#' common/services.yaml"
 
