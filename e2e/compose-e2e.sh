@@ -267,6 +267,15 @@ manual_count() { # manual_count <file> <key>: lines of a notify channel file wit
 
 manual_sent() { [[ "$(manual_count "$1" "$2")" == "1" ]]; }
 
+published_port() { # published_port <service> <container port>
+  # Ask Compose: it also reads full/.env, which the shell environment does not hold.
+  local out
+  out=$(docker compose port "$1" "$2" | head -n 1) || return 1
+  out=${out##*:}
+  [[ "$out" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$out"
+}
+
 metric_is() { # metric_is <series> <value>
   # Read the whole response first: grep -q under pipefail can break the pipe of a match.
   local body
@@ -289,9 +298,6 @@ if [[ ! -e "$secrets_dir" ]]; then
   created_secrets=1
 fi
 scripts/init-secrets.sh --dir "$secrets_dir"
-api_port="${PULSE_API_PORT:-3000}"
-status_port="${PULSE_STATUS_PORT:-8080}"
-console_port="${PULSE_CONSOLE_PORT:-8082}"
 # Hard-coded on purpose: a list derived from full/compose.yaml would accept any extra service.
 regular_services=$(docker compose -f full/compose.yaml config --services | sort | paste -sd' ' -)
 [[ "$regular_services" == "api console notify probe secrets-init status" ]] ||
@@ -312,6 +318,10 @@ docker compose down -v --remove-orphans
 
 step "Start the regular stack"
 docker compose up -d --pull missing
+api_port=$(published_port api 3000) || fail "no published port for api 3000"
+status_port=$(published_port status 8080) || fail "no published port for status 8080"
+console_port=$(published_port console 8082) || fail "no published port for console 8082"
+echo "ok: published ports api ${api_port}, status ${status_port}, console ${console_port}"
 for service in api probe status notify console; do
   wait_for "$T_UP" "$service is running" is_running "$service"
 done

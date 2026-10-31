@@ -40,6 +40,8 @@ jobs:
         run: bash e2e/outage-history.test.sh
       - name: metric_is helper
         run: bash e2e/metric-is.test.sh
+      - name: published_port helper
+        run: bash e2e/published-port.test.sh
       - name: Static setup checks
         run: scripts/check-setup.sh
       - name: Static setup checks reject broken setups
