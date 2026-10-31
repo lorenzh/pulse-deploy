@@ -85,9 +85,14 @@ semver_gt() {
   local a b i
   IFS=. read -ra a <<<"$1"
   IFS=. read -ra b <<<"$2"
+  # Compare as decimal strings: no leading zeros, then length, then text. No integer overflow.
+  local x y
   for i in 0 1 2; do
-    ((10#${a[i]} > 10#${b[i]})) && return 0
-    ((10#${a[i]} < 10#${b[i]})) && return 1
+    x=${a[i]#"${a[i]%%[!0]*}"} y=${b[i]#"${b[i]%%[!0]*}"}
+    ((${#x} > ${#y})) && return 0
+    ((${#x} < ${#y})) && return 1
+    [[ "$x" > "$y" ]] && return 0
+    [[ "$x" < "$y" ]] && return 1
   done
   return 1
 }
@@ -109,7 +114,8 @@ check_latest() {
     token=$(pull_token "$svc")
     tags=$(curl -fsS --max-time 20 -H "Authorization: Bearer ${token}" \
       "${registry}/v2/lorenzh/pulse-${svc}/tags/list?n=1000" |
-      jq -er '.tags | if type == "array" then .[] | strings else empty end' 2>/dev/null) ||
+      jq -r '.tags | if type == "array" and all(.[]; type == "string")
+        then .[] | select(test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z")) else error end' 2>/dev/null) ||
       die "pulse-${svc}: no tag list from ghcr.io"
     latest=$(highest_release <<<"$tags")
     if [[ -n "$latest" ]] && semver_gt "$latest" "$tag"; then

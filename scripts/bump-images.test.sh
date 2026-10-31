@@ -135,4 +135,27 @@ if grep -qF server-text-sentinel "$work/out" "$work/err"; then fail "check-lates
 n=$((n + 1))
 echo "ok: a malformed tag list or token reply prints only a fixed error"
 
+# A tag with an embedded newline is one tag that does not match x.y.z, so it never splits into releases.
+STUB_TAGS='["0.9.0","0.9.1-rc.1\n0.10.0"]' run --check-latest
+((code == 0)) || fail "check-latest: a tag with an embedded newline was treated as a newer release: ${out}"
+grep -qxF "api 0.9.0 up to date" <<<"$out" || fail "check-latest: wrong report for an embedded newline: ${out}"
+n=$((n + 1))
+echo "ok: --check-latest keeps JSON string boundaries"
+
+# A tag list with a non-string member is refused as a whole.
+STUB_TAGS='["0.9.0","0.10.0",7]' run --check-latest
+((code != 0)) || fail "check-latest: a tag list with a number passed"
+grep -qxF "bump-images: pulse-api: no tag list from ghcr.io" <<<"$err" || fail "check-latest: wrong error for a non-string tag: ${err}"
+n=$((n + 1))
+echo "ok: --check-latest refuses a tag list with a non-string member"
+
+# Huge version parts compare as decimals, without integer overflow.
+STUB_TAGS='["0.9.0","9223372036854775808.0.0"]' run --check-latest
+((code != 0)) || fail "check-latest: up to date with 9223372036854775808.0.0 released"
+grep -qxF "api 0.9.0 → 9223372036854775808.0.0" <<<"$out" || fail "check-latest: huge release not reported: ${out}"
+STUB_TAGS='["0.9.0","00.010.0"]' run --check-latest
+grep -qxF "api 0.9.0 → 00.010.0" <<<"$out" || fail "check-latest: leading zeros compared wrong: ${out}"
+n=$((n + 1))
+echo "ok: --check-latest compares huge version parts without overflow"
+
 echo "bump-images.test: ${n} cases passed"
