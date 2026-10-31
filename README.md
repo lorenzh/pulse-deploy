@@ -89,7 +89,7 @@ scripts/bump-images.sh --verify                # every pinned digest equals ghcr
 scripts/bump-images.sh --check-latest          # fails when a higher x.y.z release exists (weekly CI)
 ```
 
-`bump-images.sh` accepts only `x.y.z` versions of the five services, and refuses a non-200 answer or a media type other than an OCI index or a Docker manifest list. A refusal changes no file. A third-party bump is a hand edit of its line in `common/services.yaml`, with a digest from the approved list in pulse-meta (`docs/approved-packages.md`).
+`bump-images.sh` accepts only `x.y.z` versions of the five services, and refuses a non-200 answer or a media type other than an OCI index or a Docker manifest list. A refusal changes no file. `bash scripts/bump-images.test.sh` proves these refusals and the release order of `--check-latest` with a stub `curl`, without network. A third-party bump is a hand edit of its line in `common/services.yaml`, with a digest from the approved list in pulse-meta (`docs/approved-packages.md`).
 
 ## Migrating from pulse-api's `compose.yaml`
 

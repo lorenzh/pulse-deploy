@@ -7,6 +7,8 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 # The image of the service as the setups run it (no pin is repeated here).
 image=$(docker compose -f minimal/compose.yaml config --format json | jq -er '.services["secrets-init"].image')
+# Pull once up front: docker run would print pull progress to the stderr that the cases check.
+docker pull -q "$image" >/dev/null
 work=$(mktemp -d)
 volumes=()
 cleanup() {
@@ -37,12 +39,12 @@ run_init() {
   local e
   for e in "$@"; do args+=(-e "$e"); done
   # The service mounts one volume per consumer; here one volume holds them as subdirectories.
-  docker run "${args[@]}" --entrypoint sh "$image" -c \
+  docker run --pull never "${args[@]}" --entrypoint sh "$image" -c \
     'mkdir -p /out/api /out/probe /out/probe-eu /out/probe-us && exec bun /scripts/secrets-init.mjs'
 }
 
 # out_cmd <volume> <shell>: run a shell command over the output volume.
-out_cmd() { docker run --rm --network none -v "$1:/out:ro" --entrypoint sh "$image" -c "$2"; }
+out_cmd() { docker run --pull never --rm --network none -v "$1:/out:ro" --entrypoint sh "$image" -c "$2"; }
 
 # input <name> <mode> <printf-format> [args]: a host input dir with probe-token.
 input() {

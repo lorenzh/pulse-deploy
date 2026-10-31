@@ -38,6 +38,7 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 | Static setup checks | `scripts/check-setup.sh` |
 | Static checks reject broken setups | `bash scripts/check-setup.test.sh` |
 | secrets-init tests (Docker) | `bash scripts/secrets-init.test.sh` |
+| bump-images tests (stub curl, no network) | `bash scripts/bump-images.test.sh` |
 | Pins equal ghcr.io | `scripts/bump-images.sh --verify` |
 | Start a setup and wait | `scripts/init-secrets.sh && docker compose -f <setup>/compose.yaml up -d && scripts/wait-ready.sh <setup>/compose.yaml 300` |
 | Start time and RSS | `scripts/measure.sh <setup>` |

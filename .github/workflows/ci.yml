@@ -44,6 +44,8 @@ jobs:
         run: bash scripts/check-setup.test.sh
       - name: secrets-init refuses bad secrets
         run: bash scripts/secrets-init.test.sh
+      - name: bump-images refuses bad registry answers (stub curl)
+        run: bash scripts/bump-images.test.sh
 
   pins:
     runs-on: ubuntu-24.04
