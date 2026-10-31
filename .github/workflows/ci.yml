@@ -1,0 +1,230 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Daily: the dev job builds each service's main; on Mondays pins-latest also checks for releases.
+    - cron: "23 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tool versions (Compose >= 2.23)
+        run: |
+          docker compose version
+          shellcheck --version | head -n 2
+          jq --version
+          node --version
+          v=$(docker compose version --short)
+          printf '%s\n2.23.0\n' "${v#v}" | sort -V -C -r || { echo "Docker Compose ${v} is older than 2.23"; exit 1; }
+      - name: shellcheck and bash -n
+        run: |
+          git ls-files -z '*.sh' | xargs -0 shellcheck -x
+          git ls-files -z '*.sh' | xargs -0 -n 1 bash -n
+      - name: node --check
+        run: git ls-files -z '*.mjs' | xargs -0 -n 1 node --check
+      - name: jq empty
+        run: git ls-files -z '*.json' | xargs -0 -n 1 jq empty
+      - name: Outage gate
+        run: bash e2e/outage-history.test.sh
+      - name: Static setup checks
+        run: scripts/check-setup.sh
+      - name: Static setup checks reject broken setups
+        run: bash scripts/check-setup.test.sh
+      - name: secrets-init refuses bad secrets
+        run: bash scripts/secrets-init.test.sh
+
+  pins:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned digests equal ghcr.io (anonymous)
+        run: scripts/bump-images.sh --verify
+
+  minimal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/init-secrets.sh
+      - run: docker compose -f minimal/compose.yaml pull
+      - name: Start, wait for readiness and measure
+        run: scripts/measure.sh minimal
+      - name: api-health has a state within 90 s
+        run: |
+          deadline=$((SECONDS + 90))
+          until curl -fsS --max-time 5 http://127.0.0.1:3000/checks |
+            jq -e '.[] | select(.id == "api-health" and .state != "unknown")'; do
+            ((SECONDS < deadline)) || { echo "api-health has no state after 90 s"; exit 1; }
+            sleep 2
+          done
+      - name: Stack state and logs
+        if: failure()
+        run: |
+          docker compose -f minimal/compose.yaml ps --all
+          docker compose -f minimal/compose.yaml logs --no-color
+      - name: Teardown
+        if: always()
+        run: docker compose -f minimal/compose.yaml down -v --remove-orphans
+
+  full:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/init-secrets.sh
+      - run: docker compose -f full/compose.yaml pull
+      - name: Start, wait for readiness and measure
+        run: scripts/measure.sh full
+      - name: Stack state and logs
+        if: failure()
+        run: |
+          docker compose -f full/compose.yaml ps --all
+          docker compose -f full/compose.yaml logs --no-color
+      - run: docker compose -f full/compose.yaml down -v
+      - name: End-to-end test
+        timeout-minutes: 30
+        run: bash e2e/compose-e2e.sh
+      - name: Teardown
+        if: always()
+        run: |
+          docker compose -f full/compose.yaml down -v --remove-orphans
+          docker compose -p pulse-e2e -f full/compose.yaml -f e2e/compose.e2e.yaml down -v --remove-orphans
+
+  demo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker compose -f demo/compose.yaml pull
+      - name: Start (no other step before it)
+        run: |
+          date +%s >"$RUNNER_TEMP/demo-up"
+          docker compose -f demo/compose.yaml up -d
+      - run: scripts/wait-ready.sh demo/compose.yaml 300
+      - name: Open incident, DOWN mail, no host secret, status page
+        run: |
+          deadline=$(($(cat "$RUNNER_TEMP/demo-up") + 300))
+          open_incidents() {
+            docker compose -f demo/compose.yaml exec -T api bun -e \
+              "fetch('http://127.0.0.1:3000/incidents').then((r) => r.text()).then((t) => process.stdout.write(t))"
+          }
+          incident_ok() {
+            open_incidents | jq -e '[.[] | select(.resolvedAt == null)] | length >= 1 and
+              any(.[]; .checkId == "down-on-purpose" and .resolvedAt == null)' >/dev/null
+          }
+          mail_ok() {
+            curl -fsS --max-time 5 http://127.0.0.1:8025/api/v1/messages | jq -e 'any(.messages[];
+              (.Subject | test("^\\[pulse demo\\] DOWN: ")) and any(.To[]; .Address == "ops@example.com"))' >/dev/null
+          }
+          until incident_ok; do
+            (($(date +%s) < deadline)) || { echo "(a) no open down-on-purpose incident within 300 s of up"; exit 1; }
+            sleep 5
+          done
+          echo "ok: (a) an open incident, among them down-on-purpose"
+          until mail_ok; do
+            (($(date +%s) < deadline)) || { echo "(b) no DOWN mail to ops@example.com within 300 s of up"; exit 1; }
+            sleep 5
+          done
+          echo "ok: (b) mailpit holds a [pulse demo] DOWN: mail to ops@example.com"
+          [[ ! -e secrets ]] || { echo "(c) a secrets/ directory exists"; exit 1; }
+          echo "ok: (c) no secrets/ directory in the checkout"
+          curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:8080/
+          (($(date +%s) <= deadline)) || { echo "(d) after the deadline"; exit 1; }
+          echo "ok: (d) GET / on the status page answers 200, $(($(date +%s) - deadline + 300)) s after up"
+      - name: Stack state and logs
+        if: failure()
+        run: |
+          docker compose -f demo/compose.yaml ps --all
+          docker compose -f demo/compose.yaml logs --no-color
+      - name: Teardown
+        if: always()
+        run: docker compose -f demo/compose.yaml down -v --remove-orphans
+
+  dev:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pulse-deploy
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-api
+          ref: main
+          path: pulse-api
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-probe
+          ref: main
+          path: pulse-probe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-status
+          ref: main
+          path: pulse-status
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-notify
+          ref: main
+          path: pulse-notify
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-console
+          ref: main
+          path: pulse-console
+          persist-credentials: false
+      - working-directory: pulse-deploy
+        run: scripts/init-secrets.sh
+      - working-directory: pulse-deploy
+        run: docker compose -f dev/compose.yaml up -d --build
+      - working-directory: pulse-deploy
+        run: scripts/wait-ready.sh dev/compose.yaml 900
+      - name: Stack state and logs
+        if: failure()
+        working-directory: pulse-deploy
+        run: |
+          docker compose -f dev/compose.yaml ps --all
+          docker compose -f dev/compose.yaml logs --no-color
+      - name: Teardown
+        if: always()
+        working-directory: pulse-deploy
+        run: docker compose -f dev/compose.yaml down -v --remove-orphans
+
+  pins-latest:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: A newer pulse release exists (Mondays only)
+        run: |
+          if [[ "$(date -u +%u)" != "1" ]]; then echo "not Monday: skipped"; exit 0; fi
+          scripts/bump-images.sh --check-latest

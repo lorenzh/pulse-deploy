@@ -1,0 +1,59 @@
+# pulse minimal: api and one probe. Needs Docker Compose >= 2.23.
+# Setup: scripts/init-secrets.sh, then: docker compose -f minimal/compose.yaml up -d
+# See minimal/README.md.
+name: pulse
+
+services:
+  secrets-init:
+    extends: { file: ../common/services.yaml, service: secrets-init }
+    environment:
+      PULSE_LOCATION: ${PULSE_LOCATION:-default}
+    volumes:
+      # Long syntax: a missing host directory fails `up` instead of being created as root.
+      - type: bind
+        source: ${PULSE_SECRETS_DIR:-../secrets}
+        target: /in
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../scripts/secrets-init.mjs
+        target: /scripts/secrets-init.mjs
+        read_only: true
+        bind:
+          create_host_path: false
+      - api-secrets:/out/api
+      - probe-secrets:/out/probe
+
+  api:
+    extends: { file: ../common/services.yaml, service: api }
+    environment:
+      PULSE_CHECKS_FILE: /config/checks.json
+    volumes:
+      - api-data:/data
+      - api-secrets:/run/pulse:ro
+      # The directory, not the file, so a rename over checks.json (editor save) is seen.
+      - ./config:/config:ro
+    ports:
+      # The only published api port of a user setup: minimal has no status page.
+      - "127.0.0.1:${PULSE_API_PORT:-3000}:3000"
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
+  probe:
+    extends: { file: ../common/services.yaml, service: probe }
+    environment:
+      PULSE_LOCATION: ${PULSE_LOCATION:-default}
+    volumes:
+      - probe-secrets:/run/pulse:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+
+volumes:
+  api-data:
+  api-secrets:
+  probe-secrets:

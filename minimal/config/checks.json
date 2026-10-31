@@ -1,0 +1,20 @@
+{
+  "checks": [
+    {
+      "id": "api-health",
+      "name": "API health",
+      "url": "http://api:3000/healthz",
+      "intervalMs": 10000,
+      "timeoutMs": 2000
+    },
+    {
+      "id": "dns-api",
+      "name": "DNS api",
+      "type": "dns",
+      "dnsName": "api",
+      "recordType": "A",
+      "intervalMs": 10000,
+      "timeoutMs": 2000
+    }
+  ]
+}

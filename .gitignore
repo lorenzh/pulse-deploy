@@ -1,0 +1,5 @@
+secrets/
+.env
+*/.env
+e2e/.secrets/
+e2e/rw/

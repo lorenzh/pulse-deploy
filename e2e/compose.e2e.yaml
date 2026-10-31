@@ -1,0 +1,58 @@
+# TEST ONLY. E2E fixtures, merged after full/compose.yaml by e2e/compose-e2e.sh only:
+# COMPOSE_FILE=full/compose.yaml:e2e/compose.e2e.yaml. Never part of a user setup.
+# Relative paths resolve from full/, the directory of the first file.
+services:
+  api:
+    environment:
+      # Enables the write routes; the token is a throwaway of this test stack. Not under
+      # /run/pulse: that is the read-only secrets volume, which cannot hold a config file.
+      PULSE_API_ADMIN_TOKENS_FILE: /run/pulse-admin/admin-tokens.json
+      # The admin routes write the checks file, so it comes from a writable directory mount
+      # (a copy made by e2e/compose-e2e.sh). The regular read-only mount below stays, for the
+      # test that a read-only file answers 503.
+      PULSE_CHECKS_FILE: /config-rw/checks.json
+      PULSE_CHECKS_RELOAD_INTERVAL_MS: "2000"
+    configs:
+      - source: admin-tokens
+        target: /run/pulse-admin/admin-tokens.json
+    volumes:
+      # Same target path as in full/compose.yaml, so this replaces the regular read-only directory.
+      - ../e2e/ro:/config:ro
+      - ../e2e/rw:/config-rw
+    ports:
+      # Test only: the e2e drives the api from the host.
+      - "127.0.0.1:${PULSE_API_PORT:-3000}:3000"
+
+  status:
+    environment:
+      # Turns on /feed.atom.
+      PULSE_STATUS_PUBLIC_URL: http://status.e2e.invalid
+
+  notify:
+    volumes:
+      # Same target path as in full/compose.yaml: this replaces the regular channels with
+      # component-routed ones for the manual incident scenario.
+      - ../e2e/notify.json:/config/notify.json:ro
+
+  probe:
+    environment:
+      # Resolved by the probe for the header {"env": "PULSE_HEADER_SVC_TOKEN"} of the check e2e-post.
+      # The env value is the whole header value, so it carries the "Bearer " scheme.
+      PULSE_HEADER_SVC_TOKEN: Bearer ${E2E_SVC_TOKEN:-e2e-svc-token-sentinel}
+    depends_on:
+      e2e-target:
+        condition: service_started
+
+  # Target of the check e2e-post in e2e/ro/checks.json: see e2e/target.mjs.
+  e2e-target:
+    extends: { file: ../common/services.yaml, service: bun-tools }
+    command: ["bun", "/e2e/target.mjs"]
+    environment:
+      PULSE_HEADER_SVC_TOKEN: ${E2E_SVC_TOKEN:-e2e-svc-token-sentinel}
+    volumes:
+      - ../e2e/target.mjs:/e2e/target.mjs:ro
+
+configs:
+  admin-tokens:
+    content: |
+      {"tokens": [{"name": "e2e", "token": "${E2E_ADMIN_TOKEN:-e2e-admin-token-sentinel-0123}"}]}

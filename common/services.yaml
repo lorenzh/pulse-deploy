@@ -1,0 +1,81 @@
+# Shared service definitions of every setup. Each setup service reuses one of them with
+#   extends: { file: ../common/services.yaml, service: <name> }
+# This is the only file that holds image pins. Bump a pulse image with scripts/bump-images.sh.
+# A third-party bump is a hand edit of its line, with a digest from the approved list.
+# No host paths here: `depends_on`, `ports` and `volumes` live in the setup files.
+services:
+  api:
+    image: ghcr.io/lorenzh/pulse-api:0.1.0@sha256:71d623fb9e51bccdfd1f235882c69c48908960ec39e1c9b565fa700777009b18
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment:
+      PULSE_TOKENS_FILE: /run/pulse/tokens.json
+
+  probe:
+    image: ghcr.io/lorenzh/pulse-probe:0.1.0@sha256:c5cb30ec6efecd34e37a6047ba165e2eba57b95bbb2e8775c9c77753c6736871
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment:
+      PULSE_API_URL: http://api:3000
+      PULSE_PROBE_TOKEN_FILE: /run/pulse/probe-token
+
+  status:
+    image: ghcr.io/lorenzh/pulse-status:0.1.0@sha256:0347481776e1d511dd3bffc7c21d646b6661192e11f08997ffe54eb745e84fa4
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment:
+      PULSE_API_URL: http://api:3000
+    healthcheck:
+      interval: 5s
+
+  notify:
+    image: ghcr.io/lorenzh/pulse-notify:0.1.0@sha256:a63964aa2a2b728849f76b416ac5cc90b5a95306a375c028c3d4d11afe1c9e78
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment:
+      PULSE_API_URL: http://api:3000
+      PULSE_NOTIFY_CONFIG: /config/notify.json
+
+  console:
+    image: ghcr.io/lorenzh/pulse-console:0.1.0@sha256:ddadc5e1eef198861731b334bee3a593e1ef29700252212a7dba9ac81087bce3
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment:
+      PULSE_API_URL: http://api:3000
+    healthcheck:
+      interval: 5s
+
+  # One-shot: copies the secrets into per-consumer volumes, owned by bun (1000:1000), mode 0400.
+  # Root without network and with only the capabilities that the copy needs.
+  # The oven/bun image is the one of bun-tools below, so a bump edits one line.
+  secrets-init:
+    extends: { service: bun-tools }
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    command: ["bun", "/scripts/secrets-init.mjs"]
+
+  # Small helper services (secrets-init, demo init, demo targets, e2e target).
+  bun-tools:
+    image: oven/bun:1.4.0-alpine@sha256:07235578f79ef8c6f97d94aee7938e76f5cdba5f21ae5dbfdd3d3d38058437eb
+    user: "1000:1000"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  openssl:
+    image: alpine/openssl@sha256:1c361a204e9791bec6202bccbd1065eafaa65cb5a1a9a06ae000238569fba6a2
+    user: "1000:1000"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  # Demo mail catcher. It runs as root inside its image; demo only, loopback only.
+  mailpit:
+    image: axllent/mailpit:v1.32.0@sha256:0790692be935ea4420d085694f7985b1f692ca6a8771ab0e0bd8ba75ac180498
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]

@@ -1,0 +1,14 @@
+{
+  "channels": [
+    { "id": "log", "type": "file", "path": "/data/incidents.jsonl" },
+    {
+      "id": "mail",
+      "type": "email",
+      "smtp": { "host": "mailpit", "port": 1025, "tls": "none" },
+      "from": "pulse demo <pulse@example.com>",
+      "to": ["ops@example.com"],
+      "subjectPrefix": "[pulse demo]",
+      "statusUrl": "http://localhost:8080"
+    }
+  ]
+}
