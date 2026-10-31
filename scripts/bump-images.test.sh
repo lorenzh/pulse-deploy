@@ -121,4 +121,18 @@ unchanged "check-latest"
 n=$((n + 1))
 echo "ok: --check-latest reports 0.10.0 as newer than 0.9.0"
 
+# A malformed tag list or token reply: a fixed error, and no server text on stdout or stderr.
+for tags in '"server-text-sentinel"' '{"a":"server-text-sentinel"}' '["server-text-sentinel",1]x'; do
+  STUB_TAGS=$tags run --check-latest
+  ((code != 0)) || fail "check-latest: malformed tag list ${tags} passed"
+  if grep -qF server-text-sentinel "$work/out" "$work/err"; then fail "check-latest: tag list text was printed: ${err}"; fi
+  grep -qxF "bump-images: pulse-api: no tag list from ghcr.io" <<<"$err" || fail "check-latest: wrong error: ${err}"
+  unchanged "malformed tag list"
+done
+STUB_PULL_TOKEN='{"x":"server-text-sentinel"}' run --check-latest 2>/dev/null || true
+((code != 0)) || fail "check-latest: a malformed token passed"
+if grep -qF server-text-sentinel "$work/out" "$work/err"; then fail "check-latest: token reply text was printed: ${err}"; fi
+n=$((n + 1))
+echo "ok: a malformed tag list or token reply prints only a fixed error"
+
 echo "bump-images.test: ${n} cases passed"

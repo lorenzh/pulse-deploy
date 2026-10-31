@@ -25,7 +25,7 @@ is_service() { [[ " ${services} " == *" $1 "* ]]; }
 
 # pull_token <svc>: an anonymous pull token for lorenzh/pulse-<svc>. Never printed.
 pull_token() {
-  curl -fsS --max-time 20 "${registry}/token?scope=repository:lorenzh/pulse-$1:pull" | jq -er '.token' ||
+  curl -fsS --max-time 20 "${registry}/token?scope=repository:lorenzh/pulse-$1:pull" | jq -er '.token | strings' 2>/dev/null ||
     die "pulse-$1: no anonymous pull token from ghcr.io"
 }
 
@@ -108,7 +108,8 @@ check_latest() {
     read -r tag digest <<<"$(pin_parts "$(pinned "$svc")")"
     token=$(pull_token "$svc")
     tags=$(curl -fsS --max-time 20 -H "Authorization: Bearer ${token}" \
-      "${registry}/v2/lorenzh/pulse-${svc}/tags/list?n=1000" | jq -er '.tags[]') ||
+      "${registry}/v2/lorenzh/pulse-${svc}/tags/list?n=1000" |
+      jq -er '.tags | if type == "array" then .[] | strings else empty end' 2>/dev/null) ||
       die "pulse-${svc}: no tag list from ghcr.io"
     latest=$(highest_release <<<"$tags")
     if [[ -n "$latest" ]] && semver_gt "$latest" "$tag"; then
