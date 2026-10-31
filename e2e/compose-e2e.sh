@@ -30,7 +30,7 @@ OUTAGE_SECONDS="${E2E_OUTAGE_SECONDS:-35}"
 STABLE_WINDOW="${E2E_STABLE_WINDOW:-12}"
 POLL_INTERVAL="${E2E_POLL_INTERVAL:-2}"
 
-regular_checks=full/config/checks.json
+regular_checks=full/config/api/checks.json
 e2e_checks=e2e/ro/checks.json
 # A writable copy, mounted as a directory: the admin routes rename a new file over it.
 rw_dir=e2e/rw
@@ -268,7 +268,10 @@ manual_count() { # manual_count <file> <key>: lines of a notify channel file wit
 manual_sent() { [[ "$(manual_count "$1" "$2")" == "1" ]]; }
 
 metric_is() { # metric_is <series> <value>
-  api /metrics | grep -qx "$1 $2"
+  # Read the whole response first: grep -q under pipefail can break the pipe of a match.
+  local body
+  body=$(api /metrics) || return 1
+  grep -qx -- "$1 $2" <<<"$body"
 }
 
 step "Setup (project ${project})"

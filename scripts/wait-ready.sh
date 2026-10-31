@@ -71,8 +71,11 @@ oneshot_failed() { # oneshot_failed <service>: exited with another code
   [[ "$state" == exited* && "$state" != "exited 0" ]]
 }
 
-mailpit_ok() {
-  [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PULSE_MAILPIT_PORT:-8025}/readyz")" == "200" ]]
+mailpit_ok() { # the published port as Compose resolves it, so a port set in .env is used too
+  local addr
+  addr=$(dc port mailpit 8025 2>/dev/null | head -n 1) || return 1
+  [[ "$addr" =~ ^127\.0\.0\.1:[0-9]+$ ]] || return 1
+  [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://${addr}/readyz")" == "200" ]]
 }
 
 elapsed() { awk -v s="$started" -v e="$(date +%s.%N)" 'BEGIN { printf "%.1f", e - s }'; }

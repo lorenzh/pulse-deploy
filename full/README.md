@@ -32,9 +32,9 @@ Inside `full/`, plain `docker compose ps`, `logs` or `kill -s HUP api` address t
 
 ## Config files
 
-### `config/checks.json`
+### `config/api/checks.json`
 
-Mounted as the directory `./config:/config:ro` with `PULSE_CHECKS_FILE=/config/checks.json`. The api looks at it every 5 s and applies a change without a restart; `docker compose -f full/compose.yaml kill -s HUP api` applies it at once. The example checks probe the stack itself, so it works offline:
+Mounted as the directory `./config/api:/config:ro` (an api-only directory; `notify.json` is not in it) with `PULSE_CHECKS_FILE=/config/checks.json`. The api looks at it every 5 s and applies a change without a restart; `docker compose -f full/compose.yaml kill -s HUP api` applies it at once. The example checks probe the stack itself, so it works offline:
 
 | Check         | Keys                                                                                  |
 | ------------- | ------------------------------------------------------------------------------------- |
@@ -44,7 +44,7 @@ Mounted as the directory `./config:/config:ro` with `PULSE_CHECKS_FILE=/config/c
 
 Every check has an `id` (unique) and a `name` (display name). All keys are listed in the [pulse-api configuration docs](https://github.com/lorenzh/pulse-api/blob/main/docs/configuration.md#checksjson).
 
-The mount is read-only, so the api's admin config routes answer `503` to a write. To change checks through the api, enable admin tokens (below) and replace `./config:/config:ro` with a writable `./config:/config` in an override; the directory must be writable by uid 1000.
+The mount is read-only, so the api's admin config routes answer `503` to a write. To change checks through the api, enable admin tokens (below) and replace `./config/api:/config:ro` with a writable `./config/api:/config` in an override; the directory must be writable by uid 1000.
 
 ### `config/notify.json`
 

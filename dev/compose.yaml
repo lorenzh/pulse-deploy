@@ -34,7 +34,7 @@ services:
     volumes:
       - api-data:/data
       - api-secrets:/run/pulse:ro
-      - ../full/config:/config:ro
+      - ../full/config/api:/config:ro
     ports:
       - "127.0.0.1:${PULSE_API_PORT:-3000}:3000"
     depends_on:

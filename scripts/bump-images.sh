@@ -37,11 +37,12 @@ remote_digest() {
     "${registry}/v2/lorenzh/pulse-${svc}/manifests/${tag}" | tr -d '\r') ||
     die "pulse-${svc}:${tag}: request to ghcr.io failed"
   code=$(awk 'NR == 1 { print $2 }' <<<"$headers")
-  [[ "$code" == "200" ]] || die "pulse-${svc}:${tag}: ghcr.io answered ${code:-nothing}, not 200"
+  [[ "$code" =~ ^[0-9]{3}$ ]] || code=nothing
+  [[ "$code" == "200" ]] || die "pulse-${svc}:${tag}: ghcr.io answered ${code}, not 200"
   type=$(awk 'tolower($1) == "content-type:" { print $2 }' <<<"$headers" | tail -n 1)
   case "$type" in
     application/vnd.oci.image.index.v1+json | application/vnd.docker.distribution.manifest.list.v2+json) ;;
-    *) die "pulse-${svc}:${tag}: media type ${type:-none} is not an OCI index or a Docker manifest list" ;;
+    *) die "pulse-${svc}:${tag}: media type is not an OCI index or a Docker manifest list" ;;
   esac
   digest=$(awk 'tolower($1) == "docker-content-digest:" { print $2 }' <<<"$headers" | tail -n 1)
   [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "pulse-${svc}:${tag}: no valid Docker-Content-Digest"

@@ -27,7 +27,7 @@ As in [full](../full/README.md), with `build:` and the local tags `pulse-<svc>:d
 | `console`      | `127.0.0.1:${PULSE_CONSOLE_PORT:-8082}` → 8082      |
 | `probe`, `notify`, `secrets-init` | none                             |
 
-The config files are full's: `../full/config` (checks, mounted read-only as a directory) and `../full/config/notify.json`; their keys are explained in the [full README](../full/README.md#config-files). The project name is `pulse-dev` with its own volumes, so `dev` never touches the database of `full`. It still uses the same host ports, so stop `full` first.
+The config files are full's: `../full/config/api` (checks, mounted read-only as a directory that holds only api config) and `../full/config/notify.json`; their keys are explained in the [full README](../full/README.md#config-files). The project name is `pulse-dev` with its own volumes, so `dev` never touches the database of `full`. It still uses the same host ports, so stop `full` first.
 
 ## Start, stop, reset
 

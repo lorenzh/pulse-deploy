@@ -74,9 +74,12 @@ expect_refused() { # expect_refused <name> <message part> <args...>
 }
 
 STUB_TYPE=application/vnd.oci.image.manifest.v1+json expect_refused "an image manifest" \
-  "bump-images: pulse-api:0.9.1: media type application/vnd.oci.image.manifest.v1+json is not an OCI index or a Docker manifest list" \
+  "bump-images: pulse-api:0.9.1: media type is not an OCI index or a Docker manifest list" \
   api=0.9.1
-STUB_TYPE="" expect_refused "no content type" "media type none is not an OCI index" api=0.9.1
+STUB_TYPE="" expect_refused "no content type" "media type is not an OCI index" api=0.9.1
+# Header values are server text: a hostile one must not reach the output (run checks the token).
+STUB_TYPE=$pull_token expect_refused "a hostile content type" "pulse-api:0.9.1: media type is not" api=0.9.1
+STUB_CODE=$pull_token expect_refused "a hostile status line" "pulse-api:0.9.1: ghcr.io answered nothing, not 200" api=0.9.1
 STUB_BAD_TAG=0.9.2 expect_refused "a bad second service" "pulse-probe:0.9.2: media type" api=0.9.1 probe=0.9.2
 STUB_CODE=404 expect_refused "a 404" "pulse-api:0.9.1: ghcr.io answered 404, not 200" api=0.9.1
 STUB_DIGEST=sha256:xyz expect_refused "a bad digest" "pulse-api:0.9.1: no valid Docker-Content-Digest" api=0.9.1

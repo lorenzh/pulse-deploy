@@ -35,6 +35,7 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 | Helper syntax | `git ls-files -z '*.mjs' \| xargs -0 -n 1 node --check` |
 | JSON syntax | `git ls-files -z '*.json' \| xargs -0 -n 1 jq empty` |
 | Outage gate test | `bash e2e/outage-history.test.sh` |
+| metric_is helper test | `bash e2e/metric-is.test.sh` |
 | Static setup checks | `scripts/check-setup.sh` |
 | Static checks reject broken setups | `bash scripts/check-setup.test.sh` |
 | secrets-init tests (Docker) | `bash scripts/secrets-init.test.sh` |

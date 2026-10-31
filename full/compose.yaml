@@ -35,7 +35,7 @@ services:
       # The directory, not the file: a rename over a single-file bind mount (editor save, `sed -i`)
       # leaves the container with the old inode. Read-only: the api reloads checks.json when it
       # changes; an admin write answers 503. See full/README.md for a writable mount.
-      - ./config:/config:ro
+      - ./config/api:/config:ro
     depends_on:
       secrets-init:
         condition: service_completed_successfully

@@ -97,7 +97,7 @@ scripts/bump-images.sh --check-latest          # fails when a higher x.y.z relea
 
 1. Stop the old stack in your pulse-api checkout: `docker compose down` (without `-v`).
 2. Put your old `PULSE_PROBE_TOKEN` from `.env` into `secrets/probe-token` with `umask 077` (or run `scripts/init-secrets.sh` for a new one), and your `PULSE_LOCATION` into `full/.env`.
-3. Copy your `compose/checks.json` and `compose/notify.json` to `full/config/`.
+3. Copy your `compose/checks.json` to `full/config/api/` and your `compose/notify.json` to `full/config/`.
 4. `docker compose -f full/compose.yaml up -d`.
 
 ## End-to-end test

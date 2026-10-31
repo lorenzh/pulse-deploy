@@ -21,11 +21,12 @@ token=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
+# new_volume <var>: create a volume, store its name in <var> and track it in this shell for cleanup
+# (a command substitution would run in a subshell and lose the array update).
 new_volume() {
-  local v
-  v=$(docker volume create)
-  volumes+=("$v")
-  printf '%s' "$v"
+  local -n ref=$1
+  ref=$(docker volume create)
+  volumes+=("$ref")
 }
 
 # run_init <in-dir|-> <out-volume> [env...]: run secrets-init.mjs like the service does.
@@ -59,7 +60,7 @@ input() {
 
 expect_refused() { # expect_refused <name> <dir> <message part> [secret that must not show]
   local name=$1 dir=$2 want=$3 secret=${4:-} out err code=0
-  out=$(new_volume)
+  new_volume out
   err=$(run_init "$dir" "$out" 2>&1 >/dev/null) || code=$?
   ((code != 0)) || fail "${name}: secrets-init accepted the input"
   grep -qF -- "$want" <<<"$err" || fail "${name}: expected '${want}' in: ${err}"
@@ -91,7 +92,7 @@ expect_refused "two trailing newlines" "$(input nl2 600 '%s\n\n' "$token")" "wit
 # Accepted: 0600 and 0400, one trailing newline dropped, files owned by 1000:1000 with mode 0400.
 for mode in 600 400; do
   dir=$(input "ok$mode" "$mode" '%s\n' "$token")
-  out=$(new_volume)
+  new_volume out
   run_init "$dir" "$out" >/dev/null
   [[ "$(out_cmd "$out" 'cat /out/api/tokens.json')" == "{\"tokens\":[{\"location\":\"default\",\"token\":\"${token}\"}]}" ]] ||
     fail "mode ${mode}: tokens.json differs"
@@ -104,7 +105,7 @@ for mode in 600 400; do
 done
 
 # Location injection: the location stays one JSON string.
-out=$(new_volume)
+new_volume out
 run_init "$work/ok600" "$out" 'PULSE_LOCATION=x","token":"y' >/dev/null
 out_cmd "$out" 'cat /out/api/tokens.json' |
   jq -e --arg t "$token" '.tokens == [{"location": "x\",\"token\":\"y", "token": $t}]' >/dev/null ||
@@ -113,7 +114,7 @@ n=$((n + 1))
 echo "ok: PULSE_LOCATION with quotes stays one entry"
 
 # Generate mode: one 64-hex token per location, kept on a rerun.
-out=$(new_volume)
+new_volume out
 run_init - "$out" PULSE_SECRETS_MODE=generate >/dev/null
 first=$(out_cmd "$out" 'cat /out/api/tokens.json')
 jq -e '(.tokens | map(.location)) == ["eu", "us"] and all(.tokens[]; .token | test("^[0-9a-f]{64}$"))
@@ -125,4 +126,6 @@ run_init - "$out" PULSE_SECRETS_MODE=generate >/dev/null
 n=$((n + 1))
 echo "ok: generate mode writes eu and us tokens and keeps them on a rerun"
 
+# Every volume made by a case is tracked here, so cleanup removes it (none leaks).
+((${#volumes[@]} == n)) || fail "cleanup tracks ${#volumes[@]} volumes, expected ${n}"
 echo "secrets-init.test: ${n} cases passed"
