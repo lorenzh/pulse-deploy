@@ -24,10 +24,10 @@ function refused(run: () => unknown): string {
 const refusedInit = (argv: string[]): string => refused(() => init(argv));
 const EMAIL = ["--channel", "email", "--smtp-host", "mail.example.com"];
 
-function capture(argv: string[]): { code: number; out: string; err: string } {
+async function capture(argv: string[]): Promise<{ code: number; out: string; err: string }> {
   let out = "";
   let err = "";
-  const code = main(
+  const code = await main(
     argv,
     {
       stdout: (t) => {
@@ -43,18 +43,18 @@ function capture(argv: string[]): { code: number; out: string; err: string } {
 }
 
 describe("commands, help and version", () => {
-  test("--version prints the package version", () => {
-    expect(capture(["--version"])).toEqual({ code: 0, out: "pulse 0.1.0\n", err: "" });
+  test("--version prints the package version", async () => {
+    expect(await capture(["--version"])).toEqual({ code: 0, out: "pulse 0.1.0\n", err: "" });
   });
 
-  test("help for pulse and each command exits 0", () => {
-    const top = capture(["--help"]);
+  test("help for pulse and each command exits 0", async () => {
+    const top = await capture(["--help"]);
     expect(top.code).toBe(0);
     expect(top.out).toStartWith("pulse: set up, start and check a pulse installation");
     for (const cmd of ["init", "up", "down", "status"]) {
       expect(top.out).toContain(cmd);
     }
-    expect(capture([]).out).toBe(top.out);
+    expect((await capture([])).out).toBe(top.out);
     const usage: Record<string, string[]> = {
       init: ["Usage: pulse init [<dir>] [flags]", "--yes", "--check"],
       up: ["Usage: pulse up [--dir <dir>] [--timeout <seconds>]"],
@@ -62,47 +62,49 @@ describe("commands, help and version", () => {
       status: ["Usage: pulse status [--dir <dir>] [--json]"],
     };
     for (const [cmd, parts] of Object.entries(usage)) {
-      const help = capture([cmd, "--help"]);
+      const help = await capture([cmd, "--help"]);
       expect(help.code).toBe(0);
       expect(help.err).toBe("");
       for (const part of parts) expect(help.out).toContain(part);
-      expect(capture(["help", cmd]).out).toBe(help.out);
+      expect((await capture(["help", cmd])).out).toBe(help.out);
     }
   });
 
-  test("unknown options name the option and the command help", () => {
-    expect(capture(["init", "--bogus"])).toEqual({
+  test("unknown options name the option and the command help", async () => {
+    expect(await capture(["init", "--bogus"])).toEqual({
       code: 2,
       out: "",
       err: "pulse: unknown option --bogus; see pulse init --help\n",
     });
-    expect(capture(["up", "--volumes"]).err).toBe(
+    expect((await capture(["up", "--volumes"])).err).toBe(
       "pulse: unknown option --volumes; see pulse up --help\n",
     );
-    expect(capture(["--bogus"]).err).toBe("pulse: unknown option --bogus; see pulse --help\n");
+    expect((await capture(["--bogus"])).err).toBe(
+      "pulse: unknown option --bogus; see pulse --help\n",
+    );
   });
 
-  test("unknown commands, missing values and extra arguments exit 2", () => {
-    expect(capture(["start"])).toEqual({
+  test("unknown commands, missing values and extra arguments exit 2", async () => {
+    expect(await capture(["start"])).toEqual({
       code: 2,
       out: "",
       err: "pulse: unknown command start; see pulse --help\n",
     });
-    expect(capture(["help", "start"]).code).toBe(2);
-    expect(capture(["init", "--setup"]).err).toBe(
+    expect((await capture(["help", "start"])).code).toBe(2);
+    expect((await capture(["init", "--setup"])).err).toBe(
       "pulse: --setup: needs a value; see pulse init --help\n",
     );
-    expect(capture(["init", "--yes=1"]).err).toBe(
+    expect((await capture(["init", "--yes=1"])).err).toBe(
       "pulse: --yes: takes no value; see pulse init --help\n",
     );
-    expect(capture(["init", "a", "b"]).err).toBe(
+    expect((await capture(["init", "a", "b"])).err).toBe(
       "pulse: unexpected argument b; see pulse init --help\n",
     );
-    expect(capture(["status", "x"]).code).toBe(2);
+    expect((await capture(["status", "x"])).code).toBe(2);
   });
 
-  test("init without a terminal and without --setup exits 2 at once", () => {
-    expect(capture(["init", "--no-start"])).toEqual({
+  test("init without a terminal and without --setup exits 2 at once", async () => {
+    expect(await capture(["init", "--no-start"])).toEqual({
       code: 2,
       out: "",
       err: "pulse: missing --setup (stdin is not a terminal; pass the flag or --yes)\n",
@@ -111,13 +113,13 @@ describe("commands, help and version", () => {
 });
 
 describe("up, down and status", () => {
-  test("defaults", () => {
+  test("defaults", async () => {
     expect(parseCommand(["up"])).toEqual({ kind: "up", dir: ".", timeout: 300 });
     expect(parseCommand(["down"])).toEqual({ kind: "down", dir: ".", volumes: false });
     expect(parseCommand(["status"])).toEqual({ kind: "status", dir: ".", json: false });
   });
 
-  test("flags", () => {
+  test("flags", async () => {
     expect(parseCommand(["up", "--dir", "x", "--timeout", "1"])).toEqual({
       kind: "up",
       dir: "x",
@@ -136,7 +138,7 @@ describe("up, down and status", () => {
     });
   });
 
-  test("up --timeout outside 1-3600 is refused", () => {
+  test("up --timeout outside 1-3600 is refused", async () => {
     for (const t of ["0", "3601", "-1", "1.5", "x"]) {
       expect(refused(() => parseCommand(["up", "--timeout", t]))).toContain("--timeout");
     }
@@ -144,7 +146,7 @@ describe("up, down and status", () => {
 });
 
 describe("init flags", () => {
-  test("every flag is parsed", () => {
+  test("every flag is parsed", async () => {
     const cmd = parseCommand([
       "init",
       "dir",
@@ -238,20 +240,20 @@ describe("init flags", () => {
     });
   });
 
-  test("--yes with --interactive is refused", () => {
+  test("--yes with --interactive is refused", async () => {
     expect(refused(() => parseCommand(["init", "--yes", "--interactive"]))).toContain("--yes");
   });
 
-  test("a flag and its --no- form together are refused", () => {
+  test("a flag and its --no- form together are refused", async () => {
     expect(refused(() => parseCommand(["init", "--status", "--no-status"]))).toContain("--status");
   });
 
-  test("--status-port 99999 is refused", () => {
+  test("--status-port 99999 is refused", async () => {
     expect(refusedInit(["--setup", "full", "--status-port", "99999"])).toContain("--status-port");
     expect(refusedInit(["--status-port", "0"])).toContain("--status-port");
   });
 
-  test("flags that do not fit the setup are refused and named", () => {
+  test("flags that do not fit the setup are refused and named", async () => {
     expect(refusedInit(["--api-port", "3000", "--setup", "full"])).toContain("--api-port");
     expect(refusedInit(["--api-port", "3000", "--setup", "demo"])).toContain("--api-port");
     expect(refusedInit(["--setup", "demo", "--location", "eu"])).toContain("--location");
@@ -271,7 +273,7 @@ describe("init flags", () => {
     expect(refusedInit(["--setup", "nope"])).toContain("--setup");
   });
 
-  test("channel flags need notify and their channel", () => {
+  test("channel flags need notify and their channel", async () => {
     expect(refusedInit(["--smtp-host", "mail.example.com"])).toBe(
       "--smtp-host: needs --channel email",
     );
@@ -284,7 +286,7 @@ describe("init flags", () => {
     expect(refusedInit(["--channel", "webhook", "--channel", "webhook"])).toContain("twice");
   });
 
-  test("ports: two published services on one port are refused", () => {
+  test("ports: two published services on one port are refused", async () => {
     expect(refusedInit(["--status-port", "8082"])).toBe(
       "--status-port: port 8082 is already used by console",
     );
@@ -300,19 +302,19 @@ describe("init flags", () => {
     });
   });
 
-  test("--project must be a plain lower-case name", () => {
+  test("--project must be a plain lower-case name", async () => {
     expect(refusedInit(["--project", "../x"])).toContain("--project");
     expect(refusedInit(["--project", "Pulse"])).toContain("--project");
     expect(init(["--project", "my_pulse-2"]).project).toBe("my_pulse-2");
   });
 
-  test("--location must match the location pattern", () => {
+  test("--location must match the location pattern", async () => {
     expect(refusedInit(["--location", 'x","token":"y'])).toContain("--location");
     expect(refusedInit(["--location", "EU"])).toContain("--location");
     expect(init(["--location", "eu-west"]).locations).toEqual(["eu-west"]);
   });
 
-  test("--checks must fit the setup", () => {
+  test("--checks must fit the setup", async () => {
     expect(refusedInit(["--checks", "demo", "--setup", "full"])).toContain("--checks");
     expect(refusedInit(["--checks", "sample", "--setup", "demo"])).toContain("--checks");
     expect(refusedInit(["--checks", "all"])).toContain("--checks");
@@ -320,7 +322,7 @@ describe("init flags", () => {
     expect(init(["--setup", "demo", "--checks", "none"]).checkSet).toBe("none");
   });
 
-  test("public URLs: http(s) without user info, query or fragment", () => {
+  test("public URLs: http(s) without user info, query or fragment", async () => {
     for (const url of [
       "ftp://x",
       "http://a:b@x",
@@ -338,7 +340,7 @@ describe("init flags", () => {
     expect(init(["--status-url", "https://x/$a"]).urls.status).toBe("https://x/$a");
   });
 
-  test("email channel: every required flag is named when missing", () => {
+  test("email channel: every required flag is named when missing", async () => {
     expect(refusedInit([...EMAIL, "--mail-to", "ops@example.com"])).toBe(
       "--channel email: needs --mail-from",
     );
@@ -351,7 +353,7 @@ describe("init flags", () => {
     expect(refusedInit(["--channel", "webhook"])).toBe("--channel webhook: needs --webhook-url");
   });
 
-  test("email channel with every required flag is accepted", () => {
+  test("email channel with every required flag is accepted", async () => {
     const answers = init([
       ...EMAIL,
       "--mail-from",

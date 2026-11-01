@@ -8,12 +8,12 @@ import { main } from "./main.ts";
 const SECRET = "credential-sentinel-529";
 const U = `https://ops:${SECRET}@monitor.example/p?token=${SECRET}#${SECRET}`;
 
-function run(argv: string[]): { code: number; out: string } {
+async function run(argv: string[]): Promise<{ code: number; out: string }> {
   let out = "";
   const write = (text: string): void => {
     out += text;
   };
-  const code = main(argv, { stdout: write, stderr: write }, { stdinIsTTY: false });
+  const code = await main(argv, { stdout: write, stderr: write }, { stdinIsTTY: false });
   return { code, out };
 }
 
@@ -63,8 +63,8 @@ const CASES: [string, string[]][] = [
 
 describe("diagnostics never disclose user-supplied credentials", () => {
   for (const [name, argv] of CASES) {
-    test(name, () => {
-      const { code, out } = run(argv);
+    test(name, async () => {
+      const { code, out } = await run(argv);
       expect(code).not.toBe(0);
       expect(out).not.toContain(SECRET);
     });
@@ -72,7 +72,7 @@ describe("diagnostics never disclose user-supplied credentials", () => {
 });
 
 describe("shown", () => {
-  test("keeps a plain word and redacts a url", () => {
+  test("keeps a plain word and redacts a url", async () => {
     expect(shown("bogus")).toBe("bogus");
     expect(shown(U)).toBe("https://monitor.example/p");
     expect(shown(`https://[${SECRET}`)).toBe("https://(hidden)");
@@ -81,10 +81,10 @@ describe("shown", () => {
 });
 
 describe("real dependencies", () => {
-  test("init with the default random source, clock and signals writes an install", () => {
+  test("init with the default random source, clock and signals writes an install", async () => {
     const d = mkdtempSync(join(tmpdir(), "pulse-main-"));
     try {
-      const { code, out } = run(["init", d, "--setup", "minimal", "--yes"]);
+      const { code, out } = await run(["init", d, "--setup", "minimal", "--yes"]);
       expect(code).toBe(0);
       expect(out).toContain("wrote secrets/admin-token\n");
       expect(out).toContain(`next: pulse up --dir ${d}\n`);
@@ -95,8 +95,8 @@ describe("real dependencies", () => {
     }
   });
 
-  test("up, down and status stop in this build", () => {
-    expect(run(["up"]).code).toBe(1);
-    expect(run(["down"]).out).toBe("pulse down: not available in this build yet\n");
+  test("up, down and status stop in this build", async () => {
+    expect((await run(["up"])).code).toBe(1);
+    expect((await run(["down"])).out).toBe("pulse down: not available in this build yet\n");
   });
 });

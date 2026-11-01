@@ -54,6 +54,12 @@ export const processSignals: SignalSource = {
   },
 };
 
+/** Yields to the event loop so that queued SIGINT and SIGTERM handlers run. */
+async function deliverPendingSignals(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 /** Test seams: called at fixed points of the write phase. */
 export interface WriteHooks {
   afterLockCreate?: () => void;
@@ -304,7 +310,7 @@ function writeLocked(req: WriteRequest): void {
  * Writes the install under an exclusive, owned lock. Returns the exit code: 0 written, 1 refused
  * or failed, 130 when a signal arrived during the write (the write still finished).
  */
-export function writeInstall(req: WriteRequest): number {
+export async function writeInstall(req: WriteRequest): Promise<number> {
   const early = preflight(req.dir, req.files, req.force);
   if (early.length > 0) {
     for (const line of early) req.err(`pulse init: ${line}`);
@@ -349,6 +355,9 @@ export function writeInstall(req: WriteRequest): number {
     }
   } finally {
     releaseLock(req, lockPath, content);
+    // The write is synchronous, so a real signal is still queued in the event loop. Let the loop
+    // run once so the handler records it before the handler is removed.
+    await deliverPendingSignals();
     unsubscribe();
   }
   if (code === 0 && signal !== undefined) {

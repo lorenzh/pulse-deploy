@@ -83,7 +83,7 @@ function existingInstallId(dir: string): string | "invalid" | undefined {
 }
 
 /** Runs `pulse init` and returns its exit code. UsageError (exit 2) is thrown before any write. */
-export function runInit(flags: InitFlags, deps: InitDeps): number {
+export async function runInit(flags: InitFlags, deps: InitDeps): Promise<number> {
   requireAnswers(flags, deps.stdinIsTTY);
   const answers = resolveAnswers(flags);
   const dir = answers.dir;
@@ -116,7 +116,7 @@ export function runInit(flags: InitFlags, deps: InitDeps): number {
     files.set(path, { content: `${tokens[i]}\n`, mode: SECRET_FILE_MODE });
   });
 
-  const code = writeInstall({
+  const code = await writeInstall({
     dir,
     files,
     tokenPaths: new Set(tokenPaths),

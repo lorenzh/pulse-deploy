@@ -22,7 +22,7 @@ import { main } from "./main.ts";
 const byCode = (a: string, b: string): number => Number(a > b) - Number(a < b);
 
 import type { RandomSource } from "./tokens.ts";
-import type { SignalSource, WriteHooks } from "./write-install.ts";
+import { processSignals, type SignalSource, type WriteHooks } from "./write-install.ts";
 
 const NOW = new Date("2026-11-01T12:00:00.000Z");
 const isRoot = process.getuid?.() === 0;
@@ -81,10 +81,10 @@ interface Run {
   out: string;
   err: string;
 }
-function init(dir: string, flags: string[], deps: Partial<InitDeps> = {}): Run {
+async function init(dir: string, flags: string[], deps: Partial<InitDeps> = {}): Promise<Run> {
   let out = "";
   let err = "";
-  const code = main(
+  const code = await main(
     ["init", dir, "--yes", ...flags],
     {
       stdout: (t) => {
@@ -146,9 +146,9 @@ const pathsAndModes = (dir: string): string[] =>
   snapshot(dir).map((l) => l.split(" ").slice(0, 2).join(" "));
 
 describe("fresh write", () => {
-  test("writes the demo set with modes 0700 secrets/, 0600 tokens and .env, 0644 the rest", () => {
+  test("writes the demo set with modes 0700 secrets/, 0600 tokens and .env, 0644 the rest", async () => {
     const d = tempDir();
-    const r = init(d, ["--setup", "demo"]);
+    const r = await init(d, ["--setup", "demo"]);
     expect(r.code).toBe(0);
     expect(pathsAndModes(d)).toEqual(DEMO_FILES);
     expect(r.out).toContain("wrote secrets/admin-token\n");
@@ -156,11 +156,11 @@ describe("fresh write", () => {
       expect(r.out + r.err).not.toContain(readFileSync(join(d, "secrets", f), "utf8").trim());
   });
 
-  test("an existing secrets/ wider than 0700 is refused with a chmod hint", () => {
+  test("an existing secrets/ wider than 0700 is refused with a chmod hint", async () => {
     const d = tempDir();
     mkdirSync(join(d, "secrets"), { mode: 0o755 });
     chmodSync(join(d, "secrets"), 0o755);
-    const r = init(d, ["--setup", "demo"]);
+    const r = await init(d, ["--setup", "demo"]);
     expect(r.code).toBe(1);
     expect(r.err).toBe(
       "pulse init: secrets/: mode 0755 is wider than 0700; run chmod 700 secrets\n",
@@ -170,11 +170,11 @@ describe("fresh write", () => {
 });
 
 describe("conflicts", () => {
-  test("a second run lists each path, changes nothing and leaves no backup or lock", () => {
+  test("a second run lists each path, changes nothing and leaves no backup or lock", async () => {
     const d = tempDir();
-    expect(init(d, ["--setup", "demo"]).code).toBe(0);
+    expect((await init(d, ["--setup", "demo"])).code).toBe(0);
     const before = snapshot(d);
-    const r = init(d, ["--setup", "demo"], { random: seeded("other") });
+    const r = await init(d, ["--setup", "demo"], { random: seeded("other") });
     expect(r.code).toBe(1);
     expect(r.err).toBe(
       [
@@ -200,13 +200,16 @@ describe("conflicts", () => {
 });
 
 describe("--force", () => {
-  test("backs up changed files into a 0700 directory with 0600 files and keeps valid tokens", () => {
+  test("backs up changed files into a 0700 directory with 0600 files and keeps valid tokens", async () => {
     const d = tempDir();
-    expect(init(d, ["--setup", "demo"]).code).toBe(0);
+    expect((await init(d, ["--setup", "demo"])).code).toBe(0);
     const admin = readFileSync(join(d, "secrets/admin-token"));
     const oldChecks = readFileSync(join(d, "config/api/checks.json"), "utf8");
     const later = new Date("2026-11-02T08:30:00.000Z");
-    const r = init(d, ["--setup", "demo", "--force"], { random: seeded("other"), now: later });
+    const r = await init(d, ["--setup", "demo", "--force"], {
+      random: seeded("other"),
+      now: later,
+    });
     expect(r.code).toBe(0);
     expect(readFileSync(join(d, "secrets/admin-token"))).toEqual(admin);
     expect(r.out).toContain("kept secrets/admin-token\n");
@@ -222,15 +225,15 @@ describe("--force", () => {
     expect(snapshot(d).some((l) => l.includes(".tmp-"))).toBe(false);
   });
 
-  test("a 0644 token and a replace-with- token are backed up and replaced", () => {
+  test("a 0644 token and a replace-with- token are backed up and replaced", async () => {
     const d = tempDir();
-    expect(init(d, ["--setup", "full"]).code).toBe(0);
+    expect((await init(d, ["--setup", "full"])).code).toBe(0);
     const probe = join(d, "secrets/probe-token-default");
     const admin = join(d, "secrets/admin-token");
     const oldProbe = readFileSync(probe, "utf8");
     chmodSync(probe, 0o644);
     writeFileSync(admin, "replace-with-x\n");
-    const r = init(d, ["--setup", "full", "--force"], { random: seeded("other") });
+    const r = await init(d, ["--setup", "full", "--force"], { random: seeded("other") });
     expect(r.code).toBe(0);
     expect(mode(probe)).toBe("600");
     expect(readFileSync(probe, "utf8")).not.toBe(oldProbe);
@@ -248,13 +251,13 @@ describe("--force", () => {
   // root ignores the mode, so the case cannot hold there.
   test.skipIf(isRoot)(
     "a read-only .pulse-backup/ makes --force exit 1 with every managed file unchanged",
-    () => {
+    async () => {
       const d = tempDir();
-      expect(init(d, ["--setup", "demo"]).code).toBe(0);
+      expect((await init(d, ["--setup", "demo"])).code).toBe(0);
       mkdirSync(join(d, ".pulse-backup"));
       chmodSync(join(d, ".pulse-backup"), 0o500);
       const before = snapshot(d);
-      const r = init(d, ["--setup", "demo", "--force"], {
+      const r = await init(d, ["--setup", "demo", "--force"], {
         now: new Date("2026-11-02T00:00:00.000Z"),
       });
       expect(r.code).toBe(1);
@@ -266,24 +269,24 @@ describe("--force", () => {
 
 describe("symlinks", () => {
   for (const force of [false, true]) {
-    test(`a symlink at secrets/admin-token is refused (force: ${force})`, () => {
+    test(`a symlink at secrets/admin-token is refused (force: ${force})`, async () => {
       const d = tempDir();
-      expect(init(d, ["--setup", "demo"]).code).toBe(0);
+      expect((await init(d, ["--setup", "demo"])).code).toBe(0);
       const outside = join(tempDir(), "outside");
       writeFileSync(outside, "outside\n");
       rmSync(join(d, "secrets/admin-token"));
       symlinkSync(outside, join(d, "secrets/admin-token"));
-      const r = init(d, ["--setup", "demo", ...(force ? ["--force"] : [])]);
+      const r = await init(d, ["--setup", "demo", ...(force ? ["--force"] : [])]);
       expect(r.code).toBe(1);
       expect(r.err).toContain("secrets/admin-token: is a symlink");
       expect(readFileSync(outside, "utf8")).toBe("outside\n");
     });
 
-    test(`a symlinked config/ is refused (force: ${force})`, () => {
+    test(`a symlinked config/ is refused (force: ${force})`, async () => {
       const d = tempDir();
       const target = tempDir();
       symlinkSync(target, join(d, "config"));
-      const r = init(d, ["--setup", "demo", ...(force ? ["--force"] : [])]);
+      const r = await init(d, ["--setup", "demo", ...(force ? ["--force"] : [])]);
       expect(r.code).toBe(1);
       expect(r.err).toBe(
         "pulse init: config/: is a symlink; pulse init never writes through a link\n",
@@ -295,13 +298,13 @@ describe("symlinks", () => {
 });
 
 describe("lock ownership", () => {
-  test("a foreign lock is left byte- and mtime-equal", () => {
+  test("a foreign lock is left byte- and mtime-equal", async () => {
     const d = tempDir();
     const lock = join(d, ".pulse-init.lock");
     writeFileSync(lock, "pid 1\nnonce foreign\n");
     utimesSync(lock, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
     const mtime = statSync(lock).mtimeMs;
-    const r = init(d, ["--setup", "demo"]);
+    const r = await init(d, ["--setup", "demo"]);
     expect(r.code).toBe(1);
     expect(r.err).toBe(
       `pulse init: another pulse init is running in ${d} (or remove .pulse-init.lock if none is)\n`,
@@ -311,21 +314,23 @@ describe("lock ownership", () => {
     expect(readdirSync(d)).toEqual([".pulse-init.lock"]);
   });
 
-  test("the loser of two runs exits 1 and the winner's lock stays until it ends", () => {
+  test("the loser of two runs exits 1 and the winner's lock stays until it ends", async () => {
     const d = tempDir();
     const lock = join(d, ".pulse-init.lock");
-    let loser: Run | undefined;
+    let loserRun: Promise<Run> | undefined;
     let lockAfterLoser = false;
-    const winner = init(
+    const winner = await init(
       d,
       ["--setup", "demo"],
       withHooks({
         afterLockCreate: () => {
-          loser = init(d, ["--setup", "demo"], { random: seeded("loser") });
+          // The loser tries the lock synchronously, before its promise settles.
+          loserRun = init(d, ["--setup", "demo"], { random: seeded("loser") });
           lockAfterLoser = existsSync(lock);
         },
       }),
     );
+    const loser = await loserRun;
     expect(loser?.code).toBe(1);
     expect(loser?.err).toContain("another pulse init is running in");
     expect(lockAfterLoser).toBe(true);
@@ -333,10 +338,10 @@ describe("lock ownership", () => {
     expect(existsSync(lock)).toBe(false);
   });
 
-  test("a lock changed during the run is left in place with a warning", () => {
+  test("a lock changed during the run is left in place with a warning", async () => {
     const d = tempDir();
     const lock = join(d, ".pulse-init.lock");
-    const r = init(
+    const r = await init(
       d,
       ["--setup", "demo"],
       withHooks({ afterLockCreate: () => writeFileSync(lock, "pid 7\nnonce other\n") }),
@@ -346,11 +351,11 @@ describe("lock ownership", () => {
     expect(readFileSync(lock, "utf8")).toBe("pid 7\nnonce other\n");
   });
 
-  test("the owner's lock holds its pid and a nonce, and is gone after a failed write", () => {
+  test("the owner's lock holds its pid and a nonce, and is gone after a failed write", async () => {
     const d = tempDir();
     const lock = join(d, ".pulse-init.lock");
     let content = "";
-    const r = init(
+    const r = await init(
       d,
       ["--setup", "demo"],
       withHooks({
@@ -370,11 +375,11 @@ describe("lock ownership", () => {
 });
 
 describe("signals during the write", () => {
-  test("SIGINT between two renames finishes the set, releases the lock and exits 130", () => {
+  test("SIGINT between two renames finishes the set, releases the lock and exits 130", async () => {
     const d = tempDir();
     const signals = fakeSignals();
     let lockSeen = false;
-    const r = init(d, ["--setup", "demo"], {
+    const r = await init(d, ["--setup", "demo"], {
       signals,
       hooks: {
         afterRename: (_path, index) => {
@@ -393,10 +398,10 @@ describe("signals during the write", () => {
     expect(signals.listeners).toBe(0);
   });
 
-  test("a failed write with a deferred signal exits 1 and releases the lock", () => {
+  test("a failed write with a deferred signal exits 1 and releases the lock", async () => {
     const d = tempDir();
     const signals = fakeSignals();
-    const r = init(d, ["--setup", "demo"], {
+    const r = await init(d, ["--setup", "demo"], {
       signals,
       hooks: {
         afterLockCreate: () => signals.fire("SIGTERM"),
@@ -409,6 +414,28 @@ describe("signals during the write", () => {
     expect(r.err).toBe("pulse init: write failed (error); run pulse init --force again\n");
     expect(existsSync(join(d, ".pulse-init.lock"))).toBe(false);
   });
+
+  // The process signal source, not a fake: the OS queues the signal while the write runs
+  // synchronously, and init must still see it before it removes its handler.
+  test.each(["SIGINT", "SIGTERM"] as const)(
+    "a real %s sent between two renames exits 130 after the write",
+    async (name) => {
+      const d = tempDir();
+      const r = await init(d, ["--setup", "demo"], {
+        signals: processSignals,
+        hooks: {
+          afterRename: (_path, index) => {
+            if (index === 0) process.kill(process.pid, name);
+          },
+        },
+      });
+      expect(r.code).toBe(130);
+      expect(r.err).toBe("pulse init: interrupted after the files were written; nothing started\n");
+      expect(existsSync(join(d, "compose.yaml"))).toBe(true);
+      expect(existsSync(join(d, ".pulse-init.lock"))).toBe(false);
+      expect(process.listenerCount(name)).toBe(0);
+    },
+  );
 });
 
 describe("installId", () => {
@@ -421,11 +448,11 @@ describe("installId", () => {
       ),
     ].map((m) => m[1] ?? "");
 
-  test("--force keeps the installId in pulse.json and every volume label", () => {
+  test("--force keeps the installId in pulse.json and every volume label", async () => {
     const d = tempDir();
-    expect(init(d, ["--setup", "full"]).code).toBe(0);
+    expect((await init(d, ["--setup", "full"])).code).toBe(0);
     const id = idOf(d);
-    const r = init(d, ["--setup", "full", "--force"], { random: seeded("other") });
+    const r = await init(d, ["--setup", "full", "--force"], { random: seeded("other") });
     expect(r.code).toBe(0);
     expect(idOf(d)).toBe(id);
     const l = labels(d);
@@ -434,12 +461,12 @@ describe("installId", () => {
     expect(r.out).not.toContain("new installId");
   });
 
-  test("an invalid pulse.json gets a new installId with a notice", () => {
+  test("an invalid pulse.json gets a new installId with a notice", async () => {
     const d = tempDir();
-    expect(init(d, ["--setup", "full"]).code).toBe(0);
+    expect((await init(d, ["--setup", "full"])).code).toBe(0);
     const id = idOf(d);
     writeFileSync(join(d, "pulse.json"), '{"format": 1, "installId": "nope"}\n');
-    const r = init(d, ["--setup", "full", "--force"], { random: seeded("other") });
+    const r = await init(d, ["--setup", "full", "--force"], { random: seeded("other") });
     expect(r.code).toBe(0);
     expect(idOf(d)).not.toBe(id);
     expect(idOf(d)).toMatch(/^[0-9a-f]{32}$/);
@@ -451,11 +478,11 @@ describe("installId", () => {
 });
 
 describe("unused files", () => {
-  test("a file the new answers no longer use is kept and listed", () => {
+  test("a file the new answers no longer use is kept and listed", async () => {
     const d = tempDir();
-    expect(init(d, ["--setup", "full"]).code).toBe(0);
+    expect((await init(d, ["--setup", "full"])).code).toBe(0);
     const notify = readFileSync(join(d, "config/notify/notify.json"));
-    const r = init(d, ["--setup", "full", "--no-notify", "--force"]);
+    const r = await init(d, ["--setup", "full", "--no-notify", "--force"]);
     expect(r.code).toBe(0);
     expect(r.out).toContain("no longer used: config/notify/notify.json\n");
     expect(readFileSync(join(d, "config/notify/notify.json"))).toEqual(notify);

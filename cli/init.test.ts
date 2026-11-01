@@ -45,13 +45,13 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-function run(
+async function run(
   argv: string[],
   deps: Partial<InitDeps> = {},
-): { code: number; err: string; spawned: string[][] } {
+): Promise<{ code: number; err: string; spawned: string[][] }> {
   let err = "";
   const spawned: string[][] = [];
-  const code = main(
+  const code = await main(
     argv,
     {
       stdout: () => undefined,
@@ -93,35 +93,35 @@ function files(dir: string): string[] {
 }
 
 describe("pulse init --yes", () => {
-  test("makes no Docker call", () => {
+  test("makes no Docker call", async () => {
     const d = tempDir();
-    const r = run(["init", d, "--setup", "full", "--yes"]);
+    const r = await run(["init", d, "--setup", "full", "--yes"]);
     expect(r.code).toBe(0);
     expect(r.spawned).toEqual([]);
   });
 
-  test("a dev install without <src-dir>/pulse-api/Dockerfile exits 2 and writes nothing", () => {
+  test("a dev install without <src-dir>/pulse-api/Dockerfile exits 2 and writes nothing", async () => {
     const d = tempDir();
     const src = tempDir();
     for (const svc of ["probe", "status", "notify", "console"]) {
       mkdirSync(join(src, `pulse-${svc}`));
       writeFileSync(join(src, `pulse-${svc}`, "Dockerfile"), "FROM scratch\n");
     }
-    const r = run(["init", d, "--setup", "dev", "--src-dir", src, "--yes"]);
+    const r = await run(["init", d, "--setup", "dev", "--src-dir", src, "--yes"]);
     expect(r.code).toBe(2);
     expect(r.err).toBe(`pulse: --src-dir: service api has no ${src}/pulse-api/Dockerfile\n`);
     expect(readdirSync(d)).toEqual([]);
     expect(r.spawned).toEqual([]);
   });
 
-  test("two demo runs with the same now and seed give byte- and mode-equal file sets", () => {
+  test("two demo runs with the same now and seed give byte- and mode-equal file sets", async () => {
     const a = tempDir();
     const b = tempDir();
     expect(
-      run(["init", a, "--setup", "demo", "--yes"], { random: seeded("pulse-test") }).code,
+      (await run(["init", a, "--setup", "demo", "--yes"], { random: seeded("pulse-test") })).code,
     ).toBe(0);
     expect(
-      run(["init", b, "--setup", "demo", "--yes"], { random: seeded("pulse-test") }).code,
+      (await run(["init", b, "--setup", "demo", "--yes"], { random: seeded("pulse-test") })).code,
     ).toBe(0);
     const left = files(a);
     expect(left.some((l) => l.startsWith("secrets/admin-token 600 "))).toBe(true);
@@ -129,7 +129,9 @@ describe("pulse init --yes", () => {
     expect(files(b)).toEqual(left);
     // A different seed changes the tokens and the installId, so the comparison can fail.
     const c = tempDir();
-    expect(run(["init", c, "--setup", "demo", "--yes"], { random: seeded("other") }).code).toBe(0);
+    expect(
+      (await run(["init", c, "--setup", "demo", "--yes"], { random: seeded("other") })).code,
+    ).toBe(0);
     expect(files(c)).not.toEqual(left);
   });
 });

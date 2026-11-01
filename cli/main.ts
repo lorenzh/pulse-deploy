@@ -28,11 +28,15 @@ export function initDeps(io: Io, overrides: Partial<InitDeps> = {}): InitDeps {
 }
 
 /** Runs one command and returns its exit code. */
-export function main(argv: readonly string[], io: Io, deps: Partial<InitDeps> = {}): number {
+export async function main(
+  argv: readonly string[],
+  io: Io,
+  deps: Partial<InitDeps> = {},
+): Promise<number> {
   let command: Command;
   try {
     command = parseCommand(argv);
-    if (command.kind === "init") return runInit(command.flags, initDeps(io, deps));
+    if (command.kind === "init") return await runInit(command.flags, initDeps(io, deps));
   } catch (error) {
     if (error instanceof UsageError) {
       io.stderr(`pulse: ${error.message}\n`);
@@ -56,7 +60,7 @@ export function main(argv: readonly string[], io: Io, deps: Partial<InitDeps> = 
 }
 
 if (import.meta.main) {
-  const code = main(process.argv.slice(2), {
+  const code = await main(process.argv.slice(2), {
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
   });
