@@ -107,15 +107,20 @@ for setup in $setups e2e; do
     | "\(.key) network_mode \(.value.network_mode)"' <<<"$json")
   [[ -z "$bad" ]] || fail "rule 9: ${setup} sets a network_mode other than none:"$'\n'"$bad"
   # 8. Only the secrets volume, mounted exactly at /run/pulse, may target /run/pulse or below.
-  bad=$(jq -r '.services | to_entries[] | .key as $s | .value |
-    ((.volumes // [])[] | select(.target == "/run/pulse" or (.target | startswith("/run/pulse/")))
-      | select(.type != "volume" or .target != "/run/pulse" or ((.source // "") | test("-secrets$") | not))
+  #    Paths are normalized first, as Docker does: /run//pulse, /run/./pulse and /x/../run/pulse
+  #    all mount at /run/pulse.
+  bad=$(jq -r 'def norm: tostring | "/" + (split("/") | reduce .[] as $p ([];
+      if $p == "" or $p == "." then . elif $p == ".." then .[:-1] else . + [$p] end) | join("/"));
+    def under: . == "/run/pulse" or startswith("/run/pulse/");
+    .services | to_entries[] | .key as $s | .value |
+    ((.volumes // [])[] | (.target | norm) as $t | select($t | under)
+      | select(.type != "volume" or $t != "/run/pulse" or ((.source // "") | test("-secrets$") | not))
       | "\($s) volume \(.source // "-") -> \(.target)"),
-    (((.configs // []) + (.secrets // []))[] | (.target // "") as $t
-      | select($t == "/run/pulse" or ($t | startswith("/run/pulse/")))
+    (((.configs // []) + (.secrets // []))[] | ((.target // "") | norm) as $t
+      | select($t | under)
       | "\($s) config/secret \(.source) -> \($t)"),
-    ((.tmpfs // []) | if type == "array" then .[] else . end | tostring | sub(":.*$"; "")
-      | select(. == "/run/pulse" or startswith("/run/pulse/"))
+    ((.tmpfs // []) | if type == "array" then .[] else . end | tostring | sub(":.*$"; "") | norm
+      | select(under)
       | "\($s) tmpfs -> \(.)")' <<<"$json")
   [[ -z "$bad" ]] || fail "rule 8: ${setup} mounts under /run/pulse:"$'\n'"$bad"
 done

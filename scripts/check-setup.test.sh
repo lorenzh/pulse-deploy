@@ -88,6 +88,10 @@ expect_fail "a service-level tmpfs at /run/pulse on console in full" 8 \
   "sed -i '/service: console }/a\\    tmpfs: [\"/run/pulse\"]' full/compose.yaml"
 expect_fail "a service-level tmpfs below /run/pulse with options in full" 8 \
   "sed -i '/service: console }/a\\    tmpfs: \"/run/pulse/x:size=1m\"' full/compose.yaml"
+expect_fail "a tmpfs at /run//pulse on console in full" 8 \
+  "sed -i '/service: console }/a\\    tmpfs: [\"/run//pulse\"]' full/compose.yaml"
+expect_fail "a tmpfs at /tmp/../run/./pulse/ on console in full" 8 \
+  "sed -i '/service: console }/a\\    tmpfs: [\"/tmp/../run/./pulse/\"]' full/compose.yaml"
 expect_fail "secrets/ not ignored" 6 \
   "sed -i '/^secrets\\/\$/d' .gitignore"
 expect_fail "a floating bun tag in flow form" 2 \
