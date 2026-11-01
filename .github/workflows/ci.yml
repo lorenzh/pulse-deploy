@@ -52,6 +52,8 @@ jobs:
         run: bash scripts/bump-images.test.sh
       - name: wait-ready keeps its timeout on a hanging request (stub docker)
         run: bash scripts/wait-ready.test.sh
+      - name: init-secrets never writes through a planted symlink
+        run: bash scripts/init-secrets.test.sh
 
   pins:
     runs-on: ubuntu-24.04

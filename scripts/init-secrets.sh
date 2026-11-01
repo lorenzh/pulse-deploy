@@ -31,11 +31,13 @@ if [[ -e "$file" || -L "$file" ]]; then
   echo "init-secrets: $file exists, kept"
   exit 0
 fi
-tmp="$dir/.probe-token.$$"
+# mktemp creates a new file with a random name and O_EXCL, so it never follows a
+# planted symlink.
+tmp="$(mktemp "$dir/.probe-token.XXXXXXXXXX")"
+trap 'rm -f "$tmp"' EXIT
 # 32 random bytes as 64 hex characters.
 od -An -N32 -tx1 /dev/urandom | tr -d ' \n' | head -c 64 >"$tmp"
 printf '\n' >>"$tmp"
 chmod 600 "$tmp"
 mv -n "$tmp" "$file"
-rm -f "$tmp"
 echo "init-secrets: wrote $file"
