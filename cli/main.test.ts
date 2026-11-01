@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { lstatSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { shown } from "./args.ts";
 import { main } from "./main.ts";
 
@@ -10,7 +13,7 @@ function run(argv: string[]): { code: number; out: string } {
   const write = (text: string): void => {
     out += text;
   };
-  const code = main(argv, { stdout: write, stderr: write });
+  const code = main(argv, { stdout: write, stderr: write }, { stdinIsTTY: false });
   return { code, out };
 }
 
@@ -74,5 +77,26 @@ describe("shown", () => {
     expect(shown(U)).toBe("https://monitor.example/p");
     expect(shown(`https://[${SECRET}`)).toBe("https://(hidden)");
     expect(shown(`a b ${SECRET}`)).toBe("(hidden)");
+  });
+});
+
+describe("real dependencies", () => {
+  test("init with the default random source, clock and signals writes an install", () => {
+    const d = mkdtempSync(join(tmpdir(), "pulse-main-"));
+    try {
+      const { code, out } = run(["init", d, "--setup", "minimal", "--yes"]);
+      expect(code).toBe(0);
+      expect(out).toContain("wrote secrets/admin-token\n");
+      expect(out).toContain(`next: pulse up --dir ${d}\n`);
+      expect(lstatSync(join(d, "secrets/probe-token-default")).mode & 0o777).toBe(0o600);
+      expect(process.listenerCount("SIGINT")).toBe(0);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  test("up, down and status stop in this build", () => {
+    expect(run(["up"]).code).toBe(1);
+    expect(run(["down"]).out).toBe("pulse down: not available in this build yet\n");
   });
 });

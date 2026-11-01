@@ -27,14 +27,18 @@ const EMAIL = ["--channel", "email", "--smtp-host", "mail.example.com"];
 function capture(argv: string[]): { code: number; out: string; err: string } {
   let out = "";
   let err = "";
-  const code = main(argv, {
-    stdout: (t) => {
-      out += t;
+  const code = main(
+    argv,
+    {
+      stdout: (t) => {
+        out += t;
+      },
+      stderr: (t) => {
+        err += t;
+      },
     },
-    stderr: (t) => {
-      err += t;
-    },
-  });
+    { stdinIsTTY: false },
+  );
   return { code, out, err };
 }
 
@@ -97,8 +101,12 @@ describe("commands, help and version", () => {
     expect(capture(["status", "x"]).code).toBe(2);
   });
 
-  test("a valid init is parsed and then stops in this build", () => {
-    expect(capture(["init", "--yes"]).code).toBe(1);
+  test("init without a terminal and without --setup exits 2 at once", () => {
+    expect(capture(["init", "--no-start"])).toEqual({
+      code: 2,
+      out: "",
+      err: "pulse: missing --setup (stdin is not a terminal; pass the flag or --yes)\n",
+    });
   });
 });
 
