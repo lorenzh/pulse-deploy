@@ -108,9 +108,10 @@ for setup in $setups e2e; do
   [[ -z "$bad" ]] || fail "rule 9: ${setup} sets a network_mode other than none:"$'\n'"$bad"
   # 8. Only the secrets volume, mounted exactly at /run/pulse, may target /run/pulse or below.
   #    Paths are normalized first, as Docker does: /run//pulse, /run/./pulse and /x/../run/pulse
-  #    all mount at /run/pulse.
+  #    all mount at /run/pulse. /var/run is a symlink to /run in the images, so it maps too.
   bad=$(jq -r 'def norm: tostring | "/" + (split("/") | reduce .[] as $p ([];
-      if $p == "" or $p == "." then . elif $p == ".." then .[:-1] else . + [$p] end) | join("/"));
+      if $p == "" or $p == "." then . elif $p == ".." then .[:-1] else . + [$p] end) | join("/"))
+      | if . == "/var/run" or startswith("/var/run/") then .[4:] else . end;
     def under: . == "/run/pulse" or startswith("/run/pulse/");
     .services | to_entries[] | .key as $s | .value |
     ((.volumes // [])[] | (.target | norm) as $t | select($t | under)
