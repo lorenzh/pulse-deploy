@@ -272,7 +272,9 @@ describe("--check", () => {
     const message = refused(() =>
       parseCheck("https://ops:credential-sentinel-529@monitor.example/?q=1"),
     );
-    expect(message).toBe("--check #1: unknown key for type http; write key=value pairs");
+    expect(message).toBe(
+      "--check #1: unknown key https://monitor.example/ for type http; write key=value pairs",
+    );
     expect(message).not.toContain("credential-sentinel-529");
     expect(refused(() => parseCheck("url=https://a.example/,bogus=1"))).toBe(
       "--check #1: unknown key bogus for type http; write key=value pairs",

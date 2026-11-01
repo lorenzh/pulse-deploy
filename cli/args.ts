@@ -122,14 +122,33 @@ function parseFor(
     const code = (error as { code?: unknown }).code;
     const name = /'(-{1,2}[^'\s]*)/.exec(message)?.[1] ?? "?";
     if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      throw new UsageError(`unknown option ${name}; see ${see}`);
+      throw new UsageError(`unknown option ${shown(name)}; see ${see}`);
     }
     if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
       const reason = message.includes("does not take") ? "takes no value" : "needs a value";
-      throw new UsageError(`${name}: ${reason}; see ${see}`);
+      throw new UsageError(`${shown(name)}: ${reason}; see ${see}`);
     }
     throw new UsageError(`invalid arguments; see ${see}`);
   }
+}
+
+/**
+ * The only form in which a diagnostic may show user-supplied text. A plain word is shown as is.
+ * An http(s) URL is shown as scheme, host, port and path; user info, query and fragment are dropped.
+ * Anything else is hidden, since it may hold a credential.
+ */
+export function shown(value: string): string {
+  if (/^-{0,2}[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value)) return value;
+  const scheme = /^(https?):\/\//i.exec(value);
+  if (scheme !== null) {
+    try {
+      const url = new URL(value);
+      return `${url.protocol}//${url.host}${url.pathname}`;
+    } catch {
+      return `${scheme[1]}://(hidden)`;
+    }
+  }
+  return "(hidden)";
 }
 
 /** An integer flag in [min, max]. */
@@ -167,12 +186,14 @@ function pair(values: Values, name: string): boolean | undefined {
 function noPositionals(cmd: CommandName, positionals: string[]): void {
   const extra = positionals[0];
   if (extra !== undefined)
-    throw new UsageError(`unexpected argument ${extra}; see pulse ${cmd} --help`);
+    throw new UsageError(`unexpected argument ${shown(extra)}; see pulse ${cmd} --help`);
 }
 
 function initFlags(values: Values, positionals: string[]): InitFlags {
   if (positionals.length > 1) {
-    throw new UsageError(`unexpected argument ${positionals[1]}; see pulse init --help`);
+    throw new UsageError(
+      `unexpected argument ${shown(positionals[1] ?? "")}; see pulse init --help`,
+    );
   }
   const flags: InitFlags = {
     check: list(values, "check"),
@@ -231,7 +252,7 @@ function initFlags(values: Values, positionals: string[]): InitFlags {
 
 function commandName(name: string): CommandName {
   if (!(COMMANDS as readonly string[]).includes(name)) {
-    throw new UsageError(`unknown command ${name}; see pulse --help`);
+    throw new UsageError(`unknown command ${shown(name)}; see pulse --help`);
   }
   return name as CommandName;
 }
@@ -240,7 +261,7 @@ function topLevel(argv: readonly string[]): Command {
   const { values, positionals } = parseFor("pulse", [...argv]);
   if (values.help === true) return { kind: "help" };
   if (values.version === true) return { kind: "version" };
-  throw new UsageError(`unknown command ${positionals[0] ?? ""}; see pulse --help`);
+  throw new UsageError(`unknown command ${shown(positionals[0] ?? "")}; see pulse --help`);
 }
 
 function lifecycle(cmd: Exclude<CommandName, "init">, values: Values): Command {

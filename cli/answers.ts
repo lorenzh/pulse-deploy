@@ -1,6 +1,6 @@
 // The answer model of `pulse init`, its defaults and every validation rule of decisions 6-10 and 13.
 // Pure: no env, files, clock, RNG or Docker. Every refusal is a UsageError (exit code 2).
-import { type InitFlags, UsageError } from "./args.ts";
+import { type InitFlags, shown, UsageError } from "./args.ts";
 
 export const SETUPS = ["minimal", "full", "demo", "dev"] as const;
 export type Setup = (typeof SETUPS)[number];
@@ -283,7 +283,7 @@ function splitFields(label: string, value: string): Fields {
       );
     }
     const key = part.slice(0, eq);
-    if (fields.has(key)) return refuse(`${label}: ${key} is given twice`);
+    if (fields.has(key)) return refuse(`${label}: ${shown(key)} is given twice`);
     fields.set(key, part.slice(eq + 1));
   }
   return fields;
@@ -302,9 +302,7 @@ function checkType(label: string, fields: Fields): CheckType {
   const allowed = new Set([...COMMON_KEYS, ...spec.required, ...spec.optional]);
   for (const [key, v] of fields) {
     if (!allowed.has(key)) {
-      // Echo only a key of the known key shape: anything else may be a URL with credentials.
-      const shown = /^[a-z][a-z_]{0,31}$/.test(key) ? ` ${key}` : "";
-      return refuse(`${label}: unknown key${shown} for type ${type}; write key=value pairs`);
+      return refuse(`${label}: unknown key ${shown(key)} for type ${type}; write key=value pairs`);
     }
     if (v === "") return refuse(`${label}: ${key} must not be empty`);
   }
