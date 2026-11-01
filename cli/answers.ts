@@ -1,6 +1,7 @@
 // The answer model of `pulse init`, its defaults and every validation rule of decisions 6-10 and 13.
 // Pure: no env, files, clock, RNG or Docker. Every refusal is a UsageError (exit code 2).
 import { type InitFlags, UsageError } from "./args.ts";
+import { setIds } from "./render-checks.ts";
 
 export const SETUPS = ["minimal", "full", "demo", "dev"] as const;
 export type Setup = (typeof SETUPS)[number];
@@ -615,6 +616,8 @@ export function resolveAnswers(flags: InitFlags): Answers {
   };
   setupFit(flags, services);
   const ports = publishedPorts(flags, services);
+  const status = services.status;
+  const set = checkSet(flags, setup);
   const answers: Answers = {
     dir: flags.dir ?? ".",
     ...services,
@@ -622,8 +625,12 @@ export function resolveAnswers(flags: InitFlags): Answers {
     ports,
     urls: publicUrls(flags, ports),
     locations: setup === "demo" ? ["eu", "us"] : [validateLocation(flags.location ?? "default")],
-    checkSet: checkSet(flags, setup),
-    checks: assignIds(flags.check.map((v, i) => parseCheck(v, i))),
+    checkSet: set,
+    // The ids of the check set are taken, so the checks file never holds an id twice.
+    checks: assignIds(
+      flags.check.map((v, i) => parseCheck(v, i)),
+      setIds(set, status),
+    ),
     channels: channels(flags, setup, services.notify),
     start: flags.start ?? false,
     force: flags.force,
