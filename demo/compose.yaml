@@ -1,0 +1,152 @@
+# pulse demo: the full stack with seeded checks, a target that goes down on purpose and a mail
+# catcher. Needs Docker Compose >= 2.23, no .env and no secret input:
+#   docker compose -f demo/compose.yaml up -d
+# Reset: docker compose -f demo/compose.yaml down -v (touches only pulse-demo_*). See demo/README.md.
+name: pulse-demo
+
+services:
+  # Generate mode: a random token per location, kept on a rerun. No host secret file.
+  secrets-init:
+    extends: { file: ../common/services.yaml, service: secrets-init }
+    environment:
+      PULSE_SECRETS_MODE: generate
+      PULSE_DEMO_LOCATIONS: eu,us
+    volumes:
+      - type: bind
+        source: ../scripts/secrets-init.mjs
+        target: /scripts/secrets-init.mjs
+        read_only: true
+        bind:
+          create_host_path: false
+      - api-secrets:/out/api
+      - probe-eu-secrets:/out/probe-eu
+      - probe-us-secrets:/out/probe-us
+
+  # Writes the checks file, with maintenance windows relative to the start time. Root, because a
+  # fresh named volume is owned by root; it has no capabilities and no network use.
+  demo-init:
+    extends: { file: ../common/services.yaml, service: bun-tools }
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    command: ["bun", "/demo/init.mjs"]
+    volumes:
+      - demo-config:/shared
+      - type: bind
+        source: ./init.mjs
+        target: /demo/init.mjs
+        read_only: true
+        bind:
+          create_host_path: false
+
+  demo-targets:
+    extends: { file: ../common/services.yaml, service: bun-tools }
+    restart: unless-stopped
+    command: ["bun", "/demo/targets.mjs"]
+    volumes:
+      - type: bind
+        source: ./targets.mjs
+        target: /demo/targets.mjs
+        read_only: true
+        bind:
+          create_host_path: false
+
+  demo-tls:
+    extends: { file: ../common/services.yaml, service: openssl }
+    restart: unless-stopped
+    entrypoint: ["sh", "/demo/tls.sh"]
+    volumes:
+      - type: bind
+        source: ./tls.sh
+        target: /demo/tls.sh
+        read_only: true
+        bind:
+          create_host_path: false
+
+  mailpit:
+    extends: { file: ../common/services.yaml, service: mailpit }
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PULSE_MAILPIT_PORT:-8025}:8025"
+
+  api:
+    extends: { file: ../common/services.yaml, service: api }
+    environment:
+      PULSE_CHECKS_FILE: /shared/checks.json
+    volumes:
+      - api-data:/data
+      - api-secrets:/run/pulse:ro
+      - demo-config:/shared:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      demo-init:
+        condition: service_completed_successfully
+
+  probe-eu:
+    extends: { file: ../common/services.yaml, service: probe }
+    environment:
+      PULSE_LOCATION: eu
+    volumes:
+      - probe-eu-secrets:/run/pulse:ro
+    depends_on: &probe-deps
+      secrets-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      demo-targets:
+        condition: service_started
+      demo-tls:
+        condition: service_started
+
+  probe-us:
+    extends: { file: ../common/services.yaml, service: probe }
+    environment:
+      PULSE_LOCATION: us
+    volumes:
+      - probe-us-secrets:/run/pulse:ro
+    depends_on: *probe-deps
+
+  status:
+    extends: { file: ../common/services.yaml, service: status }
+    environment:
+      # Shows the checks list, which carries the latency chart (status reads /latency only then).
+      PULSE_STATUS_SHOW_CHECKS: "true"
+    ports:
+      # Loopback: the demo is a throwaway with generated tokens and must not reach the LAN.
+      - "127.0.0.1:${PULSE_STATUS_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  notify:
+    extends: { file: ../common/services.yaml, service: notify }
+    volumes:
+      - notify-data:/data
+      - type: bind
+        source: ./notify.json
+        target: /config/notify.json
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      api:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
+  console:
+    extends: { file: ../common/services.yaml, service: console }
+    ports:
+      - "127.0.0.1:${PULSE_CONSOLE_PORT:-8082}:8082"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  api-data:
+  notify-data:
+  demo-config:
+  api-secrets:
+  probe-eu-secrets:
+  probe-us-secrets:

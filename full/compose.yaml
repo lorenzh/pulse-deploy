@@ -1,0 +1,90 @@
+# pulse full: api, probe, status, notify and console. Needs Docker Compose >= 2.23.
+# Setup: scripts/init-secrets.sh, then: docker compose -f full/compose.yaml up -d
+# Same project name and volumes as pulse-api's former compose.yaml. See full/README.md.
+name: pulse
+
+services:
+  secrets-init:
+    extends: { file: ../common/services.yaml, service: secrets-init }
+    environment:
+      PULSE_LOCATION: ${PULSE_LOCATION:-default}
+    volumes:
+      # Long syntax: a missing host directory fails `up` instead of being created as root.
+      - type: bind
+        source: ${PULSE_SECRETS_DIR:-../secrets}
+        target: /in
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../scripts/secrets-init.mjs
+        target: /scripts/secrets-init.mjs
+        read_only: true
+        bind:
+          create_host_path: false
+      - api-secrets:/out/api
+      - probe-secrets:/out/probe
+
+  api:
+    extends: { file: ../common/services.yaml, service: api }
+    environment:
+      PULSE_CHECKS_FILE: /config/checks.json
+    volumes:
+      - api-data:/data
+      - api-secrets:/run/pulse:ro
+      # The directory, not the file: a rename over a single-file bind mount (editor save, `sed -i`)
+      # leaves the container with the old inode. Read-only: the api reloads checks.json when it
+      # changes; an admin write answers 503. See full/README.md for a writable mount.
+      - ./config/api:/config:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
+  probe:
+    extends: { file: ../common/services.yaml, service: probe }
+    environment:
+      PULSE_LOCATION: ${PULSE_LOCATION:-default}
+    volumes:
+      - probe-secrets:/run/pulse:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      status:
+        condition: service_healthy
+
+  status:
+    extends: { file: ../common/services.yaml, service: status }
+    environment:
+      # The stack shows check names; the e2e test reads them.
+      PULSE_STATUS_SHOW_CHECKS: "true"
+    ports:
+      - "${PULSE_STATUS_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  notify:
+    extends: { file: ../common/services.yaml, service: notify }
+    volumes:
+      - notify-data:/data
+      - ./config/notify.json:/config/notify.json:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+  console:
+    extends: { file: ../common/services.yaml, service: console }
+    ports:
+      # Admin UI: loopback only.
+      - "127.0.0.1:${PULSE_CONSOLE_PORT:-8082}:8082"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  api-data:
+  notify-data:
+  api-secrets:
+  probe-secrets:

@@ -1,0 +1,97 @@
+# pulse dev: the full stack built from sibling checkouts (pulse-api, pulse-probe, pulse-status,
+# pulse-notify, pulse-console next to pulse-deploy, or under PULSE_SRC_DIR). Needs Compose >= 2.23.
+# Setup: scripts/init-secrets.sh, then: docker compose -f dev/compose.yaml up -d --build
+# Own project and volumes, so it never touches the full setup. See dev/README.md.
+name: pulse-dev
+
+services:
+  secrets-init:
+    extends: { file: ../common/services.yaml, service: secrets-init }
+    environment:
+      PULSE_LOCATION: ${PULSE_LOCATION:-default}
+    volumes:
+      - type: bind
+        source: ${PULSE_SECRETS_DIR:-../secrets}
+        target: /in
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../scripts/secrets-init.mjs
+        target: /scripts/secrets-init.mjs
+        read_only: true
+        bind:
+          create_host_path: false
+      - api-secrets:/out/api
+      - probe-secrets:/out/probe
+
+  api:
+    extends: { file: ../common/services.yaml, service: api }
+    build: { context: "${PULSE_SRC_DIR:-../..}/pulse-api" }
+    image: pulse-api:dev
+    environment:
+      PULSE_CHECKS_FILE: /config/checks.json
+    volumes:
+      - api-data:/data
+      - api-secrets:/run/pulse:ro
+      - ../full/config/api:/config:ro
+    ports:
+      - "127.0.0.1:${PULSE_API_PORT:-3000}:3000"
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
+  probe:
+    extends: { file: ../common/services.yaml, service: probe }
+    build: { context: "${PULSE_SRC_DIR:-../..}/pulse-probe" }
+    image: pulse-probe:dev
+    environment:
+      PULSE_LOCATION: ${PULSE_LOCATION:-default}
+    volumes:
+      - probe-secrets:/run/pulse:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      status:
+        condition: service_healthy
+
+  status:
+    extends: { file: ../common/services.yaml, service: status }
+    build: { context: "${PULSE_SRC_DIR:-../..}/pulse-status" }
+    image: pulse-status:dev
+    environment:
+      PULSE_STATUS_SHOW_CHECKS: "true"
+    ports:
+      - "${PULSE_STATUS_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  notify:
+    extends: { file: ../common/services.yaml, service: notify }
+    build: { context: "${PULSE_SRC_DIR:-../..}/pulse-notify" }
+    image: pulse-notify:dev
+    volumes:
+      - notify-data:/data
+      - ../full/config/notify.json:/config/notify.json:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+  console:
+    extends: { file: ../common/services.yaml, service: console }
+    build: { context: "${PULSE_SRC_DIR:-../..}/pulse-console" }
+    image: pulse-console:dev
+    ports:
+      - "127.0.0.1:${PULSE_CONSOLE_PORT:-8082}:8082"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  api-data:
+  notify-data:
+  api-secrets:
+  probe-secrets:
