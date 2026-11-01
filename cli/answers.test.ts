@@ -257,8 +257,15 @@ describe("--check", () => {
       "url=https://example.com/,id=Bad",
       "type=tcp,host=a b,port=1",
     ]) {
-      expect(refused(() => parseCheck(value))).toStartWith(`--check ${value}:`);
+      expect(refused(() => parseCheck(value))).toStartWith("--check #1:");
     }
+  });
+
+  test("a refused --check names its position and never echoes the value", () => {
+    const value = "url=https://ops:credential-sentinel-529@monitor.example/";
+    const message = refused(() => parseCheck(value, 2));
+    expect(message).toBe("--check #3: url: must not contain user info");
+    expect(message).not.toContain("credential-sentinel-529");
   });
 
   test("heartbeat is refused with a pointer to the docs", () => {

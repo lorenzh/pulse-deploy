@@ -329,11 +329,12 @@ function timing(label: string, type: CheckType, fields: Fields): Base {
 }
 
 /**
- * One `--check` value (decision 8) without its id: the id is assigned by `assignIds`.
+ * One `--check` value (decision 8), at `index` among the given ones, without its id: the id is assigned by `assignIds`.
  * `explicitId` is the `id=` value when one was given.
  */
-export function parseCheck(value: string): { check: Draft; explicitId?: string } {
-  const label = `--check ${value}`;
+export function parseCheck(value: string, index = 0): { check: Draft; explicitId?: string } {
+  // The label names the position only: a value can hold URL credentials.
+  const label = `--check #${index + 1}`;
   const fields = splitFields(label, value);
   const type = checkType(label, fields);
   const base = timing(label, type, fields);
@@ -606,7 +607,7 @@ export function resolveAnswers(flags: InitFlags): Answers {
     urls: publicUrls(flags, ports),
     locations: setup === "demo" ? ["eu", "us"] : [validateLocation(flags.location ?? "default")],
     checkSet: checkSet(flags, setup),
-    checks: assignIds(flags.check.map(parseCheck)),
+    checks: assignIds(flags.check.map((v, i) => parseCheck(v, i))),
     channels: channels(flags, setup, services.notify),
     start: flags.start ?? false,
     force: flags.force,

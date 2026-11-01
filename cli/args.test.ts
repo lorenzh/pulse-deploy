@@ -1,7 +1,7 @@
 /* eslint-disable sonarjs/no-clear-text-protocols -- URL fixtures are parsed, never requested */
 import { describe, expect, test } from "bun:test";
 import { type Answers, resolveAnswers } from "./answers.ts";
-import { HELP, parseCommand, UsageError } from "./args.ts";
+import { parseCommand, UsageError } from "./args.ts";
 import { main } from "./main.ts";
 
 function init(argv: string[]): Answers {
@@ -44,11 +44,25 @@ describe("commands, help and version", () => {
   });
 
   test("help for pulse and each command exits 0", () => {
-    expect(capture([]).code).toBe(0);
-    expect(capture(["--help"]).out).toBe(HELP.pulse);
-    for (const cmd of ["init", "up", "down", "status"] as const) {
-      expect(capture([cmd, "--help"])).toEqual({ code: 0, out: HELP[cmd], err: "" });
-      expect(capture(["help", cmd]).out).toBe(HELP[cmd]);
+    const top = capture(["--help"]);
+    expect(top.code).toBe(0);
+    expect(top.out).toStartWith("pulse: set up, start and check a pulse installation");
+    for (const cmd of ["init", "up", "down", "status"]) {
+      expect(top.out).toContain(cmd);
+    }
+    expect(capture([]).out).toBe(top.out);
+    const usage: Record<string, string[]> = {
+      init: ["Usage: pulse init [<dir>] [flags]", "--yes", "--check"],
+      up: ["Usage: pulse up [--dir <dir>] [--timeout <seconds>]"],
+      down: ["Usage: pulse down [--dir <dir>] [--volumes]"],
+      status: ["Usage: pulse status [--dir <dir>] [--json]"],
+    };
+    for (const [cmd, parts] of Object.entries(usage)) {
+      const help = capture([cmd, "--help"]);
+      expect(help.code).toBe(0);
+      expect(help.err).toBe("");
+      for (const part of parts) expect(help.out).toContain(part);
+      expect(capture(["help", cmd]).out).toBe(help.out);
     }
   });
 
