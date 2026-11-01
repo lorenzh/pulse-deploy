@@ -24,7 +24,7 @@ export const BACKUP_DIR = ".pulse-backup";
 export const INTERRUPTED_MESSAGE = "interrupted after the files were written; nothing started";
 
 /** Every managed file name that an install can hold, besides the probe token files. */
-const KNOWN_FILES = [
+export const KNOWN_FILES = [
   "compose.yaml",
   ".env",
   "pulse.json",

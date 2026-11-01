@@ -4,6 +4,7 @@ import { type Command, HELP, parseCommand, UsageError } from "./args.ts";
 import { bunSpawn, type DockerDeps, realSleep } from "./docker.ts";
 import { type InitDeps, runInit } from "./init.ts";
 import { runDown, runUp } from "./lifecycle.ts";
+import { streamPrompter } from "./prompt.ts";
 import { runStatus } from "./status.ts";
 import { cryptoRandom } from "./tokens.ts";
 import { processSignals } from "./write-install.ts";
@@ -16,12 +17,19 @@ export interface Io {
 }
 
 /** The real dependencies of `pulse init`; tests replace any of them. */
-export function initDeps(io: Io, overrides: Partial<InitDeps> = {}): InitDeps {
+export function initDeps(
+  io: Io,
+  overrides: Partial<InitDeps> = {},
+  docker: Partial<DockerDeps> = {},
+): InitDeps {
+  const signals = overrides.signals ?? processSignals;
   return {
     random: cryptoRandom,
     now: new Date(),
-    signals: processSignals,
+    signals,
     stdinIsTTY: process.stdin.isTTY === true,
+    prompter: () => streamPrompter(process.stdin, io.stdout, signals),
+    docker: dockerDeps(io, docker),
     pid: process.pid,
     cliVersion: VERSION,
     out: (line) => io.stdout(`${line}\n`),
@@ -54,7 +62,7 @@ export async function main(
   let command: Command;
   try {
     command = parseCommand(argv);
-    if (command.kind === "init") return await runInit(command.flags, initDeps(io, deps));
+    if (command.kind === "init") return await runInit(command.flags, initDeps(io, deps, docker));
   } catch (error) {
     if (error instanceof UsageError) {
       io.stderr(`pulse: ${error.message}\n`);
