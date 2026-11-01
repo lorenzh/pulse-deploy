@@ -272,12 +272,10 @@ describe("--check", () => {
     const message = refused(() =>
       parseCheck("https://ops:credential-sentinel-529@monitor.example/?q=1"),
     );
-    expect(message).toBe(
-      "--check #1: unknown key https://monitor.example/ for type http; write key=value pairs",
-    );
+    expect(message).toBe("--check #1: unknown key in pair 1 for type http; write key=value pairs");
     expect(message).not.toContain("credential-sentinel-529");
     expect(refused(() => parseCheck("url=https://a.example/,bogus=1"))).toBe(
-      "--check #1: unknown key bogus for type http; write key=value pairs",
+      "--check #1: unknown key in pair 2 for type http; write key=value pairs",
     );
   });
 
@@ -349,7 +347,7 @@ describe("--check", () => {
     expect(answers.checks.map((c) => c.id)).toEqual(["https-example-com", "https-example-com-2"]);
     expect(
       refused(() => resolveAnswers(flags({ check: ["url=http://x/,id=a", "url=http://y/,id=a"] }))),
-    ).toContain("id a");
+    ).toBe("--check #2: id is already taken");
     expect(assignIds([parseCheck("url=http://x/")], ["http-x"]).map((c) => c.id)).toEqual([
       "http-x-2",
     ]);

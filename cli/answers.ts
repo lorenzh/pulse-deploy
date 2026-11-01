@@ -1,6 +1,6 @@
 // The answer model of `pulse init`, its defaults and every validation rule of decisions 6-10 and 13.
 // Pure: no env, files, clock, RNG or Docker. Every refusal is a UsageError (exit code 2).
-import { type InitFlags, shown, UsageError } from "./args.ts";
+import { type InitFlags, UsageError } from "./args.ts";
 
 export const SETUPS = ["minimal", "full", "demo", "dev"] as const;
 export type Setup = (typeof SETUPS)[number];
@@ -272,10 +272,22 @@ const CHECK_TYPES: Record<
 };
 const COMMON_KEYS = ["type", "name", "id", "interval", "timeout"];
 const WIZARD_TYPES = Object.keys(CHECK_TYPES);
+const KNOWN_KEYS = new Set([
+  ...COMMON_KEYS,
+  ...Object.values(CHECK_TYPES).flatMap((t) => [...t.required, ...t.optional]),
+]);
+
+/**
+ * How a diagnostic names a --check key: a key that some check type knows is named,
+ * any other text is named by its pair position only, since it may hold a credential.
+ */
+function checkKey(key: string, index: number): string {
+  return KNOWN_KEYS.has(key) ? `key ${key}` : `key in pair ${index + 1}`;
+}
 
 function splitFields(label: string, value: string): Fields {
   const fields: Fields = new Map();
-  for (const part of value.split(",")) {
+  for (const [i, part] of value.split(",").entries()) {
     const eq = part.indexOf("=");
     if (eq <= 0) {
       return refuse(
@@ -283,7 +295,7 @@ function splitFields(label: string, value: string): Fields {
       );
     }
     const key = part.slice(0, eq);
-    if (fields.has(key)) return refuse(`${label}: ${shown(key)} is given twice`);
+    if (fields.has(key)) return refuse(`${label}: ${checkKey(key, i)} is given twice`);
     fields.set(key, part.slice(eq + 1));
   }
   return fields;
@@ -300,9 +312,11 @@ function checkType(label: string, fields: Fields): CheckType {
   const typed = type as CheckType;
   const spec = CHECK_TYPES[typed];
   const allowed = new Set([...COMMON_KEYS, ...spec.required, ...spec.optional]);
-  for (const [key, v] of fields) {
+  for (const [i, [key, v]] of [...fields].entries()) {
     if (!allowed.has(key)) {
-      return refuse(`${label}: unknown key ${shown(key)} for type ${type}; write key=value pairs`);
+      return refuse(
+        `${label}: unknown ${checkKey(key, i)} for type ${type}; write key=value pairs`,
+      );
     }
     if (v === "") return refuse(`${label}: ${key} must not be empty`);
   }
@@ -367,9 +381,9 @@ export function assignIds(
   taken: Iterable<string> = [],
 ): Check[] {
   const used = new Set(taken);
-  return parsed.map(({ check, explicitId }) => {
+  return parsed.map(({ check, explicitId }, index) => {
     if (explicitId !== undefined && used.has(explicitId)) {
-      return refuse(`--check: id ${explicitId} is already taken`);
+      return refuse(`--check #${index + 1}: id is already taken`);
     }
     const id = explicitId ?? freeSlug(check.name, used);
     used.add(id);

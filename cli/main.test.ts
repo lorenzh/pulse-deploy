@@ -29,6 +29,22 @@ const CASES: [string, string[]][] = [
   ["bad type", ["init", "--yes", "--check", `type=${SECRET},url=https://a.example/`]],
   ["bad record", ["init", "--yes", "--check", `dns=a.example,type=dns,record=${SECRET}`]],
   ["no pairs", ["init", "--yes", "--check", `${SECRET}`]],
+  [
+    "duplicate word key",
+    ["init", "--yes", "--check", `url=https://a.example/,${SECRET}=1,${SECRET}=2`],
+  ],
+  ["unknown word key", ["init", "--yes", "--check", `url=https://a.example/,${SECRET}=1`]],
+  [
+    "duplicate id",
+    [
+      "init",
+      "--yes",
+      "--check",
+      `url=https://a.example/,id=${SECRET}`,
+      "--check",
+      `url=https://b.example/,id=${SECRET}`,
+    ],
+  ],
   ["bad id", ["init", "--yes", "--check", `url=https://a.example/,id=${SECRET}!`]],
   ["status url", ["init", "--yes", "--status-url", U]],
   ["webhook url", ["init", "--yes", "--channel", "webhook", "--webhook-url", U]],
