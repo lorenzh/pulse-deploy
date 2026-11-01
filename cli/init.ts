@@ -1,13 +1,19 @@
 // `pulse init`: validate and render in memory, then write under the lock (decisions 11, 12, 13).
 // Prompts fill unanswered flags (phase A); "Start now?" (phase C) and `pulse up` (phase D) follow.
 import { lstatSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { type Answers, resolveAnswers } from "./answers.ts";
+import { join } from "node:path";
+import { type Answers, resolveAnswers, validateLocation } from "./answers.ts";
 import { type InitFlags, UsageError } from "./args.ts";
 import type { DockerDeps } from "./docker.ts";
 import { runUp } from "./lifecycle.ts";
-import { askInit, askYesNo, InputEnded, type Prompter, PromptInterrupted } from "./prompt.ts";
-import { serviceList } from "./render-compose.ts";
+import {
+  askInit,
+  askYesNo,
+  checkDevSources,
+  InputEnded,
+  type Prompter,
+  PromptInterrupted,
+} from "./prompt.ts";
 import { type FileMap, renderFiles, SECRET_FILE_MODE } from "./render-files.ts";
 import { loadCommon } from "./services.ts";
 import {
@@ -65,7 +71,12 @@ function requireAnswers(flags: InitFlags): void {
 
 /** Decision 12: the conflict and symlink preflight once, before the first question. */
 function earlyConflicts(flags: InitFlags): string[] {
-  const known = new Map(KNOWN_FILES.map((p) => [p, { content: "", mode: 0o644 }]));
+  // Probe tokens whose path is already fixed by the flags; the write checks the rest again.
+  let locations: string[] = [];
+  if (flags.setup === "demo") locations = ["eu", "us"];
+  else if (flags.location !== undefined) locations = [validateLocation(flags.location)];
+  const paths = [...KNOWN_FILES, ...locations.map((l) => `secrets/probe-token-${l}`)];
+  const known = new Map(paths.map((p) => [p, { content: "", mode: 0o644 }]));
   return preflight(flags.dir ?? ".", known, flags.force);
 }
 
@@ -89,23 +100,6 @@ function reportTokens(
       kept = false;
     }
     out(`${path}: ${kept ? "kept" : "generated"}`);
-  }
-}
-
-/** Decision 5: a dev install needs <src-dir>/pulse-<svc>/Dockerfile for each enabled service. */
-function checkDevSources(answers: Answers, dir: string): void {
-  if (answers.setup !== "dev" || answers.srcDir === undefined) return;
-  const src = resolve(dir, answers.srcDir);
-  for (const svc of serviceList(answers)) {
-    if (svc.kind !== "pulse") continue;
-    const dockerfile = join(src, `pulse-${svc.name}`, "Dockerfile");
-    let ok = false;
-    try {
-      ok = lstatSync(dockerfile).isFile();
-    } catch {
-      ok = false;
-    }
-    if (!ok) throw new UsageError(`--src-dir: service ${svc.name} has no ${dockerfile}`);
   }
 }
 

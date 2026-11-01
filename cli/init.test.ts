@@ -330,3 +330,90 @@ describe("pulse init prompts: cancellation by phase", () => {
     expect(readdirSync(d)).toEqual(["compose.yaml"]);
   });
 });
+
+describe("pulse init prompts: invalid flags, source directory and early probe tokens", () => {
+  const FULL = [
+    "--setup",
+    "full",
+    "--no-status",
+    "--notify",
+    "--no-console",
+    "--location",
+    "default",
+  ];
+  const FULL_ANSWERS = "sample\nn\n";
+  test.each([
+    {
+      name: "email: an invalid --smtp-password-env",
+      flags: ["--channel", "email", "--smtp-user", "ops", "--smtp-password-env", "PULSE_PASSWORD"],
+      input: `${FULL_ANSWERS}mail.example.com\nmail.example.com\n`,
+      rule: "pulse: --smtp-password-env: must not start with PULSE_ or COMPOSE_\n",
+    },
+    {
+      name: "webhook: an invalid --webhook-secret-env",
+      flags: ["--channel", "webhook", "--webhook-secret-env", "COMPOSE_X"],
+      input: `${FULL_ANSWERS}https://hooks.example.com/\n`,
+      rule: "pulse: --webhook-secret-env: must not start with PULSE_ or COMPOSE_\n",
+    },
+  ])("$name exits 2 with its rule before the channel questions", async ({ flags, input, rule }) => {
+    const d = tempDir();
+    const r = await run(["init", d, "--interactive", ...FULL, ...flags], { input });
+    expect(r.code).toBe(2);
+    expect(r.err.endsWith(rule)).toBe(true);
+    expect(readdirSync(d)).toEqual([]);
+  });
+
+  test("a prompted dev source directory without the Dockerfiles is asked again", async () => {
+    const d = tempDir();
+    const bad = tempDir();
+    const good = tempDir();
+    for (const svc of ["api", "probe", "status", "notify", "console"]) {
+      mkdirSync(join(good, `pulse-${svc}`));
+      writeFileSync(join(good, `pulse-${svc}`, "Dockerfile"), "FROM scratch\n");
+    }
+    const r = await run(
+      [
+        "init",
+        d,
+        "--interactive",
+        "--setup",
+        "dev",
+        "--no-status",
+        "--no-notify",
+        "--no-console",
+        "--api-port",
+        "3000",
+        "--location",
+        "default",
+        "--no-start",
+      ],
+      { input: `${bad}\n${good}\nsample\nn\n` },
+    );
+    expect(r.code).toBe(0);
+    const srcQuestions = r.questions.filter((q) => q.startsWith("Source directory"));
+    expect(srcQuestions).toHaveLength(2);
+    expect(readdirSync(d)).toContain("pulse.json");
+  });
+
+  test("an existing probe token of the --location flag conflicts before the first question", async () => {
+    const d = tempDir();
+    mkdirSync(join(d, "secrets"), { mode: 0o700 });
+    writeFileSync(join(d, "secrets", "probe-token-default"), `${"a".repeat(64)}\n`, {
+      mode: 0o600,
+    });
+    const r = await run([
+      "init",
+      d,
+      "--interactive",
+      "--setup",
+      "minimal",
+      "--location",
+      "default",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.err).toBe(
+      "pulse init: secrets/probe-token-default: exists\npulse init: pass --force to back up and replace them\n",
+    );
+    expect(r.questions).toEqual([]);
+  });
+});

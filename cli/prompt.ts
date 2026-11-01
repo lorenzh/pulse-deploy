@@ -2,8 +2,11 @@
 // every unanswered flag in the decision 12 order. A flag skips its question; an invalid answer is
 // asked again with the rule. The wizard draws no random bytes, so a prompted run and the same
 // answers given as flags render the same files.
+import { lstatSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
+  type Answers,
   assignIds,
   parseCheck,
   resolveAnswers,
@@ -16,6 +19,7 @@ import {
 } from "./answers.ts";
 import { type InitFlags, UsageError } from "./args.ts";
 import { setIds } from "./render-checks.ts";
+import { serviceList } from "./render-compose.ts";
 import type { SignalSource } from "./write-install.ts";
 
 /** Stdin ended while a prompt waited. */
@@ -81,6 +85,23 @@ export function streamPrompter(
       rl.close();
     },
   };
+}
+
+/** Decision 5: a dev install needs <src-dir>/pulse-<svc>/Dockerfile for each enabled service. */
+export function checkDevSources(answers: Answers, dir: string): void {
+  if (answers.setup !== "dev" || answers.srcDir === undefined) return;
+  const src = resolve(dir, answers.srcDir);
+  for (const svc of serviceList(answers)) {
+    if (svc.kind !== "pulse") continue;
+    const dockerfile = join(src, `pulse-${svc.name}`, "Dockerfile");
+    let ok = false;
+    try {
+      ok = lstatSync(dockerfile).isFile();
+    } catch {
+      ok = false;
+    }
+    if (!ok) throw new UsageError(`--src-dir: service ${svc.name} has no ${dockerfile}`);
+  }
 }
 
 type Err = (line: string) => void;
@@ -360,6 +381,13 @@ function unanswered(f: InitFlags, key: EmailField["key"]): boolean {
 
 /** Email fields, each validated with the answers so far and stand-ins for the rest. */
 async function askEmail(p: Prompter, err: Err, f: InitFlags): Promise<void> {
+  // Flags that are invalid on their own exit 2 now; no answer could fix them.
+  resolveAnswers(
+    emailCandidate({
+      ...f,
+      ...(f.smtpPasswordEnv !== undefined && f.smtpUser === undefined ? { smtpUser: "user" } : {}),
+    }),
+  );
   const flags = f as unknown as Record<string, unknown>;
   for (const field of EMAIL_FIELDS) {
     if (!unanswered(f, field.key)) continue;
@@ -367,7 +395,14 @@ async function askEmail(p: Prompter, err: Err, f: InitFlags): Promise<void> {
       const before = flags[field.key];
       flags[field.key] = field.map(raw);
       try {
-        resolveAnswers(emailCandidate(f));
+        resolveAnswers(
+          emailCandidate({
+            ...f,
+            ...(f.smtpPasswordEnv !== undefined && f.smtpUser === undefined
+              ? { smtpUser: "user" }
+              : {}),
+          }),
+        );
       } catch (error) {
         flags[field.key] = before;
         throw error;
@@ -383,6 +418,9 @@ async function askWebhook(p: Prompter, err: Err, f: InitFlags): Promise<void> {
   err(
     "  The webhook URL is stored in clear text: use a URL without credentials and sign with a secret env.",
   );
+  // Flags that are invalid on their own exit 2 now; no answer could fix them.
+  if (f.webhookUrl !== undefined) validateWebhookUrl(f.webhookUrl);
+  if (f.webhookSecretEnv !== undefined) validateEnvName("--webhook-secret-env", f.webhookSecretEnv);
   if (f.webhookUrl === undefined)
     f.webhookUrl = await askRequired(p, err, "  webhook URL", undefined, validateWebhookUrl);
   if (f.webhookSecretEnv === undefined) {
@@ -443,13 +481,17 @@ async function askPlaces(p: Prompter, err: Err, f: InitFlags, setup: Setup): Pro
   if (setup !== "demo")
     f.location ??= await askRequired(p, err, "Probe location", "default", validateLocation);
   if (setup === "dev")
-    f.srcDir ??= await askRequired(
-      p,
-      err,
-      "Source directory (holds pulse-<svc>/)",
-      "..",
-      accepted((srcDir) => ({ setup, srcDir })),
-    );
+    f.srcDir ??= await askRequired(p, err, "Source directory (holds pulse-<svc>/)", "..", (raw) => {
+      const answers = resolveAnswers(
+        isolated({
+          setup,
+          srcDir: raw,
+          ...defined({ dir: f.dir, status: f.status, notify: f.notify, console: f.console }),
+        }),
+      );
+      checkDevSources(answers, answers.dir);
+      return raw;
+    });
   const def = setup === "demo" ? "demo" : "sample";
   f.checks ??= await askRequired(
     p,
