@@ -1,7 +1,10 @@
 // Entry point of the pulse CLI: wires the real dependencies, help, version and exit codes (decision 15).
 import pkg from "../package.json" with { type: "json" };
 import { type Command, HELP, parseCommand, UsageError } from "./args.ts";
+import { bunSpawn, type DockerDeps, realSleep } from "./docker.ts";
 import { type InitDeps, runInit } from "./init.ts";
+import { runDown, runUp } from "./lifecycle.ts";
+import { runStatus } from "./status.ts";
 import { cryptoRandom } from "./tokens.ts";
 import { processSignals } from "./write-install.ts";
 
@@ -27,11 +30,26 @@ export function initDeps(io: Io, overrides: Partial<InitDeps> = {}): InitDeps {
   };
 }
 
+/** The real dependencies of `pulse up`, `down` and `status`; tests replace any of them. */
+export function dockerDeps(io: Io, overrides: Partial<DockerDeps> = {}): DockerDeps {
+  return {
+    spawn: bunSpawn,
+    env: process.env,
+    now: () => performance.now(),
+    sleep: realSleep,
+    signals: processSignals,
+    out: (line) => io.stdout(`${line}\n`),
+    err: (line) => io.stderr(`${line}\n`),
+    ...overrides,
+  };
+}
+
 /** Runs one command and returns its exit code. */
 export async function main(
   argv: readonly string[],
   io: Io,
   deps: Partial<InitDeps> = {},
+  docker: Partial<DockerDeps> = {},
 ): Promise<number> {
   let command: Command;
   try {
@@ -52,10 +70,11 @@ export async function main(
       io.stdout(`pulse ${VERSION}\n`);
       return 0;
     case "up":
+      return await runUp(command.dir, command.timeout, dockerDeps(io, docker));
     case "down":
+      return await runDown(command.dir, command.volumes, dockerDeps(io, docker));
     case "status":
-      io.stderr(`pulse ${command.kind}: not available in this build yet\n`);
-      return 1;
+      return await runStatus(command.dir, command.json, dockerDeps(io, docker));
   }
 }
 

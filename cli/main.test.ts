@@ -95,8 +95,22 @@ describe("real dependencies", () => {
     }
   });
 
-  test("up, down and status stop in this build", async () => {
-    expect((await run(["up"])).code).toBe(1);
-    expect((await run(["down"])).out).toBe("pulse down: not available in this build yet\n");
+  test("up, down and status without docker on PATH exit 3", async () => {
+    for (const argv of [["up"], ["down"], ["status"]]) {
+      let out = "";
+      const write = (text: string): void => {
+        out += text;
+      };
+      const code = await main(
+        argv,
+        { stdout: write, stderr: write },
+        {},
+        {
+          env: { PATH: "/nonexistent" },
+        },
+      );
+      expect(code).toBe(3);
+      expect(out).toContain("Docker is not installed or not on PATH");
+    }
   });
 });
