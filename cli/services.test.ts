@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { resolveAnswers } from "./answers.ts";
 import { parseCommand } from "./args.ts";
 import { composeModel } from "./render-compose.ts";
-import { ASSETS, assertPin, COPIED_KEYS, loadCommon, PinError } from "./services.ts";
+import { ASSETS, assertPin, loadCommon, PinError } from "./services.ts";
 
 // Digests are built at run time, so no literal here has the shape of a pin.
 const DIGEST = `sha256:${"0".repeat(64)}`;
@@ -77,6 +77,19 @@ describe("common/services.yaml", () => {
     const raw = Bun.YAML.parse(ASSETS.commonServices) as {
       services: Record<string, Record<string, unknown>>;
     };
+    // The ten keys of decision 3, written out so the test does not read them from the code.
+    const SPEC_KEYS = [
+      "image",
+      "restart",
+      "security_opt",
+      "cap_drop",
+      "cap_add",
+      "user",
+      "network_mode",
+      "command",
+      "environment",
+      "healthcheck",
+    ];
     const cases: [string[], Record<string, string>][] = [
       [
         ["--setup", "full"],
@@ -90,7 +103,7 @@ describe("common/services.yaml", () => {
       for (const [name, entry] of Object.entries(map)) {
         const common = raw.services[entry] ?? {};
         const generated = services[name] ?? {};
-        for (const key of COPIED_KEYS) {
+        for (const key of SPEC_KEYS) {
           if (common[key] === undefined) continue;
           if (key === "environment") {
             expect(generated.environment).toMatchObject(common.environment as object);
