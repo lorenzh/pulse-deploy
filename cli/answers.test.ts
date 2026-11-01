@@ -268,6 +268,24 @@ describe("--check", () => {
     expect(message).not.toContain("credential-sentinel-529");
   });
 
+  test("a value without url= never echoes its credentials", () => {
+    const message = refused(() =>
+      parseCheck("https://ops:credential-sentinel-529@monitor.example/?q=1"),
+    );
+    expect(message).toBe("--check #1: unknown key for type http; write key=value pairs");
+    expect(message).not.toContain("credential-sentinel-529");
+    expect(refused(() => parseCheck("url=https://a.example/,bogus=1"))).toBe(
+      "--check #1: unknown key bogus for type http; write key=value pairs",
+    );
+  });
+
+  test("an http url may contain an apostrophe", () => {
+    expect(parseCheck("url=https://example.com/what's-new").check).toMatchObject({
+      type: "http",
+      url: "https://example.com/what's-new",
+    });
+  });
+
   test("heartbeat is refused with a pointer to the docs", () => {
     expect(refused(() => parseCheck("type=heartbeat"))).toContain("docs/cli.md");
   });

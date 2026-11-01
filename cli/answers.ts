@@ -216,7 +216,7 @@ const CHECK_TYPES: Record<
     optional: [],
     build: (label, f, base) => {
       const url = f.get("url") ?? "";
-      if (/['\s]/.test(url)) return refuse(`${label}: url must not contain whitespace or '`);
+      if (/\s/.test(url)) return refuse(`${label}: url must not contain whitespace`);
       parseUrl(`${label}: url`, url);
       return { check: { ...base, type: "http", name: "", url }, target: url };
     },
@@ -301,7 +301,11 @@ function checkType(label: string, fields: Fields): CheckType {
   const spec = CHECK_TYPES[typed];
   const allowed = new Set([...COMMON_KEYS, ...spec.required, ...spec.optional]);
   for (const [key, v] of fields) {
-    if (!allowed.has(key)) return refuse(`${label}: unknown key ${key} for type ${type}`);
+    if (!allowed.has(key)) {
+      // Echo only a key of the known key shape: anything else may be a URL with credentials.
+      const shown = /^[a-z][a-z_]{0,31}$/.test(key) ? ` ${key}` : "";
+      return refuse(`${label}: unknown key${shown} for type ${type}; write key=value pairs`);
+    }
     if (v === "") return refuse(`${label}: ${key} must not be empty`);
   }
   for (const key of spec.required) {
