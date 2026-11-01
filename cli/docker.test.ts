@@ -265,6 +265,18 @@ describe("project resolution and guard", () => {
       "project pulse-other is used by /srv/elsewhere; stop it there",
     ],
     [
+      "container without a working_dir label",
+      {},
+      { containers: [""] },
+      "project pulse-other has a container without a working directory label",
+    ],
+    [
+      "two containers without a working_dir label",
+      {},
+      { containers: ["", "   "] },
+      "project pulse-other has a container without a working directory label",
+    ],
+    [
       "declared volume without labels",
       {},
       { labelled: [], volumes: { "pulse-other_api-data": {} } },

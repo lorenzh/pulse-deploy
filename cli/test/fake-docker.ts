@@ -130,7 +130,7 @@ function dockerHandler(
       return o.serverFails === true
         ? { code: 1, stdout: "", stderr: "Cannot connect to the Docker daemon\nmore" }
         : ok("27.0.0\n");
-    if (argv[1] === "ps") return ok(`${(o.containers ?? []).join("\n")}\n`);
+    if (argv[1] === "ps") return ok((o.containers ?? []).map((wd, i) => `c${i} ${wd}\n`).join(""));
     if (argv[1] !== "volume") return undefined;
     if (argv[2] === "ls") return ok(`${(o.labelled ?? []).join("\n")}\n`);
     const name = argv.at(-1) ?? "";

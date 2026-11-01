@@ -372,15 +372,23 @@ async function checkContainers(dir: string, p: string, env: Env, deps: DockerDep
       "--filter",
       `label=com.docker.compose.project=${p}`,
       "--format",
-      '{{.Label "com.docker.compose.project.working_dir"}}',
+      '{{.ID}} {{.Label "com.docker.compose.project.working_dir"}}',
     ],
     { env },
   );
   if (ps.code !== 0) throw new CommandError(`docker ps failed: ${firstLine(ps.stderr)}`, 1);
   const here = realpathOr(dir);
   for (const line of ps.stdout.split("\n")) {
-    const wd = line.trim();
-    if (wd !== "" && realpathOr(wd) !== here)
+    const record = line.trim();
+    if (record === "") continue;
+    const space = record.indexOf(" ");
+    const wd = space < 0 ? "" : record.slice(space + 1).trim();
+    if (wd === "")
+      throw new CommandError(
+        `project ${p} has a container without a working directory label; stop it or choose another name (pulse init --force --project <name>)`,
+        1,
+      );
+    if (realpathOr(wd) !== here)
       throw new CommandError(
         `project ${p} is used by ${wd}; stop it there or choose another name (pulse init --force --project <name>)`,
         1,
