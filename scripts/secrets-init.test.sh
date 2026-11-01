@@ -40,8 +40,9 @@ run_init() {
   local e
   for e in "$@"; do args+=(-e "$e"); done
   # The service mounts one volume per consumer; here one volume holds them as subdirectories.
+  # MAKE_CONSOLE=1 also creates /out/console, as when the console volume is mounted.
   docker run --pull never "${args[@]}" --entrypoint sh "$image" -c \
-    'mkdir -p /out/api /out/probe /out/probe-eu /out/probe-us && exec bun /scripts/secrets-init.mjs'
+    'mkdir -p /out/api /out/probe /out/probe-eu /out/probe-us ${MAKE_CONSOLE:+/out/console} && exec bun /scripts/secrets-init.mjs'
 }
 
 # out_cmd <volume> <shell>: run a shell command over the output volume.
@@ -125,6 +126,98 @@ run_init - "$out" PULSE_SECRETS_MODE=generate >/dev/null
 [[ "$(out_cmd "$out" 'cat /out/api/tokens.json')" == "$first" ]] || fail "generate: a rerun changed the tokens"
 n=$((n + 1))
 echo "ok: generate mode writes eu and us tokens and keeps them on a rerun"
+
+# Multi-location and admin inputs: <name> then <file>=<content> pairs, each file mode 0600.
+multi_input() {
+  local dir="$work/$1" pair
+  shift
+  mkdir -p "$dir"
+  for pair in "$@"; do
+    printf '%s\n' "${pair#*=}" >"$dir/${pair%%=*}"
+    chmod 600 "$dir/${pair%%=*}"
+  done
+  printf '%s' "$dir"
+}
+eu_token=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+us_token=1111111111111111111111111111111111111111111111111111111111111111
+admin_token=adadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadad
+all_files='/out/api/tokens.json /out/api/admin-tokens.json /out/probe/probe-token /out/probe-eu/probe-token /out/probe-us/probe-token /out/console/admin-token'
+
+# expect_multi_refused <name> <dir> <message part> [env...]: exit 1, one line, no token, no file.
+expect_multi_refused() {
+  local name=$1 dir=$2 want=$3 out err code=0 t f
+  shift 3
+  new_volume out
+  err=$(run_init "$dir" "$out" "$@" 2>&1 >/dev/null) || code=$?
+  ((code == 1)) || fail "${name}: expected exit 1, got ${code}"
+  grep -qF -- "$want" <<<"$err" || fail "${name}: expected '${want}' in: ${err}"
+  [[ "$(wc -l <<<"$err")" == "1" ]] || fail "${name}: expected one stderr line, got: ${err}"
+  for t in "$token" "$eu_token" "$us_token" "$admin_token"; do
+    if grep -qF -- "$t" <<<"$err"; then fail "${name}: the error shows a token"; fi
+  done
+  for f in $all_files; do
+    out_cmd "$out" "[ ! -e $f ]" || fail "${name}: a refused input wrote $f"
+  done
+  [[ -z "$(out_cmd "$out" 'find /out -type f')" ]] || fail "${name}: the output volume holds a file"
+  n=$((n + 1))
+  printf 'ok: %s refused: %s\n' "$name" "$err"
+}
+
+# Two locations: one probe-token per location and one tokens.json with exactly both entries.
+two=$(multi_input two "probe-token-eu=$eu_token" "probe-token-us=$us_token")
+new_volume out
+msg=$(run_init "$two" "$out" PULSE_PROBE_LOCATIONS=eu,us 2>&1)
+out_cmd "$out" 'cat /out/api/tokens.json' |
+  jq -e --arg e "$eu_token" --arg u "$us_token" \
+    '.tokens == [{"location": "eu", "token": $e}, {"location": "us", "token": $u}]' >/dev/null ||
+  fail "two locations: tokens.json is wrong"
+[[ "$(out_cmd "$out" 'cat /out/probe-eu/probe-token')" == "$eu_token" ]] || fail "two locations: probe-eu differs"
+[[ "$(out_cmd "$out" 'cat /out/probe-us/probe-token')" == "$us_token" ]] || fail "two locations: probe-us differs"
+out_cmd "$out" '[ ! -e /out/probe/probe-token ] && [ ! -e /out/api/admin-tokens.json ]' ||
+  fail "two locations: wrote a default probe-token or an admin file"
+[[ "$(out_cmd "$out" 'stat -c "%u:%g %a" /out/api/tokens.json /out/probe-eu/probe-token /out/probe-us/probe-token | sort -u')" == "1000:1000 400" ]] ||
+  fail "two locations: the files are not 1000:1000 0400"
+grep -qF -e "$eu_token" -e "$us_token" <<<"$msg" && fail "two locations: output shows a token"
+n=$((n + 1))
+echo "ok: PULSE_PROBE_LOCATIONS=eu,us writes probe-eu, probe-us and one tokens.json with 2 entries"
+
+expect_multi_refused "a missing location file" "$(multi_input miss "probe-token-eu=$eu_token")" \
+  "secrets-init: /in/probe-token-us: is missing" PULSE_PROBE_LOCATIONS=eu,us
+wide=$(multi_input wide "probe-token-eu=$eu_token" "probe-token-us=$us_token")
+chmod 644 "$wide/probe-token-us"
+expect_multi_refused "a 0644 location file" "$wide" \
+  "/in/probe-token-us: mode 0644 allows group or other access" PULSE_PROBE_LOCATIONS=eu,us
+
+# Admin token, without and with /out/console.
+admin=$(multi_input admin "probe-token-eu=$eu_token" "admin-token=$admin_token")
+for console in "" 1; do
+  new_volume out
+  msg=$(run_init "$admin" "$out" PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=on ${console:+MAKE_CONSOLE=1} 2>&1)
+  out_cmd "$out" 'cat /out/api/admin-tokens.json' |
+    jq -e --arg a "$admin_token" '. == {"tokens": [{"name": "admin", "token": $a}]}' >/dev/null ||
+    fail "admin (console=${console:-no}): admin-tokens.json is wrong"
+  out_cmd "$out" 'cat /out/api/tokens.json' | jq -e '.tokens | length == 1' >/dev/null ||
+    fail "admin (console=${console:-no}): tokens.json is wrong"
+  if [[ -n "$console" ]]; then
+    [[ "$(out_cmd "$out" 'cat /out/console/admin-token')" == "$admin_token" ]] || fail "admin: console admin-token differs"
+    [[ "$(out_cmd "$out" 'stat -c "%u:%g %a" /out/api/admin-tokens.json /out/console/admin-token | sort -u')" == "1000:1000 400" ]] ||
+      fail "admin: the files are not 1000:1000 0400"
+  else
+    out_cmd "$out" '[ ! -e /out/console ]' || fail "admin: wrote /out/console without the directory"
+  fi
+  grep -qF -e "$admin_token" -e "$eu_token" <<<"$msg" && fail "admin: output shows a token"
+  n=$((n + 1))
+  echo "ok: PULSE_SECRETS_ADMIN=on writes admin-tokens.json (console dir: ${console:-no})"
+done
+
+expect_multi_refused "admin equal to a probe token" \
+  "$(multi_input same "probe-token-eu=$eu_token" "admin-token=$eu_token")" \
+  "/in/admin-token: must differ from every probe token" PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=on
+expect_multi_refused "PULSE_SECRETS_ADMIN=yes" "$admin" "PULSE_SECRETS_ADMIN: must be on or off" \
+  PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=yes
+expect_multi_refused "a location with a quote" \
+  "$(multi_input quote "probe-token-a=$eu_token")" "PULSE_PROBE_LOCATIONS: each location must match" \
+  'PULSE_PROBE_LOCATIONS=a,x"y'
 
 # Every volume made by a case is tracked here, so cleanup removes it (none leaks).
 ((${#volumes[@]} == n)) || fail "cleanup tracks ${#volumes[@]} volumes, expected ${n}"
