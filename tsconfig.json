@@ -1,0 +1,4 @@
+{
+  "extends": "@lorenzh/pulse-config/tsconfig.base.json",
+  "include": ["cli"]
+}

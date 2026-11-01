@@ -13,6 +13,9 @@ permissions:
   contents: read
 
 jobs:
+  check:
+    uses: lorenzh/pulse-config/.github/workflows/check.yml@04108fa0c67d9a79c0f6d1ade4dd78df3ad8a4a7
+
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

@@ -1,0 +1,29 @@
+{
+  "extends": ["@lorenzh/pulse-config/biome.json"],
+  "files": {
+    "includes": [
+      "cli/**",
+      "package.json",
+      "tsconfig.json",
+      "biome.json",
+      "bunfig.toml",
+      "eslint.config.js",
+      "lefthook.yml",
+      "!.github",
+      "!*.md",
+      "!common",
+      "!demo",
+      "!dev",
+      "!e2e",
+      "!full",
+      "!minimal",
+      "!scripts",
+      "!secrets",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/bun.lock",
+      "!**/*.html",
+      "!**/test/fixtures"
+    ]
+  }
+}
