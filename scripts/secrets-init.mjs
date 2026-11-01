@@ -70,8 +70,8 @@ function tokensJson(entries) {
 }
 
 function adminEnabled(env) {
-  const value = env.PULSE_SECRETS_ADMIN ?? "";
-  if (value === "" || value === "off") return false;
+  const value = env.PULSE_SECRETS_ADMIN;
+  if (value === undefined || value === "off") return false;
   if (value === "on") return true;
   fail("PULSE_SECRETS_ADMIN", "must be on or off");
 }

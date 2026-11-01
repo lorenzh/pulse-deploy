@@ -215,6 +215,8 @@ expect_multi_refused "admin equal to a probe token" \
   "/in/admin-token: must differ from every probe token" PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=on
 expect_multi_refused "PULSE_SECRETS_ADMIN=yes" "$admin" "PULSE_SECRETS_ADMIN: must be on or off" \
   PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=yes
+expect_multi_refused "empty PULSE_SECRETS_ADMIN" "$admin" "PULSE_SECRETS_ADMIN: must be on or off" \
+  PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=
 expect_multi_refused "a location with a quote" \
   "$(multi_input quote "probe-token-a=$eu_token")" "PULSE_PROBE_LOCATIONS: each location must match" \
   'PULSE_PROBE_LOCATIONS=a,x"y'
