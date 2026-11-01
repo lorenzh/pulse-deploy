@@ -166,7 +166,7 @@ expect_multi_refused() {
 # Two locations: one probe-token per location and one tokens.json with exactly both entries.
 two=$(multi_input two "probe-token-eu=$eu_token" "probe-token-us=$us_token")
 new_volume out
-msg=$(run_init "$two" "$out" PULSE_PROBE_LOCATIONS=eu,us 2>&1)
+msg=$(run_init "$two" "$out" PULSE_PROBE_LOCATIONS=eu,us 2>&1) || fail "two locations: secrets-init refused the input"
 out_cmd "$out" 'cat /out/api/tokens.json' |
   jq -e --arg e "$eu_token" --arg u "$us_token" \
     '.tokens == [{"location": "eu", "token": $e}, {"location": "us", "token": $u}]' >/dev/null ||
@@ -192,7 +192,7 @@ expect_multi_refused "a 0644 location file" "$wide" \
 admin=$(multi_input admin "probe-token-eu=$eu_token" "admin-token=$admin_token")
 for console in "" 1; do
   new_volume out
-  msg=$(run_init "$admin" "$out" PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=on ${console:+MAKE_CONSOLE=1} 2>&1)
+  msg=$(run_init "$admin" "$out" PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=on ${console:+MAKE_CONSOLE=1} 2>&1) || fail "admin (console=${console:-no}): secrets-init refused the input"
   out_cmd "$out" 'cat /out/api/admin-tokens.json' |
     jq -e --arg a "$admin_token" '. == {"tokens": [{"name": "admin", "token": $a}]}' >/dev/null ||
     fail "admin (console=${console:-no}): admin-tokens.json is wrong"
