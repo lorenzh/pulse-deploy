@@ -1,0 +1,125 @@
+name: release
+
+# Publishes the pulse CLI binaries for a pushed tag v<version> (docs/cli.md, "Install").
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  create:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Create the draft release
+        run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --notes "pulse CLI $GITHUB_REF_NAME"
+
+  build:
+    needs: create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: pulse-linux-x64
+          - runner: ubuntu-24.04-arm
+            asset: pulse-linux-arm64
+          - runner: macos-15
+            asset: pulse-darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ASSET: ${{ matrix.asset }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Compile the native binary
+        run: bun build --compile --minify cli/main.ts --outfile "dist/$ASSET"
+      - name: Sign ad hoc when macOS refuses to run it
+        if: runner.os == 'macOS'
+        run: |
+          if ! "dist/$ASSET" --version >/dev/null 2>&1; then
+            codesign --sign - "dist/$ASSET"
+            echo "codesign: ad-hoc signature applied" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Smoke test without Bun on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cp "dist/$ASSET" "$RUNNER_TEMP/bin/pulse"
+          env -i PATH="$RUNNER_TEMP/bin:/usr/bin:/bin" HOME="$HOME" bash cli/test/smoke.sh
+      - name: The version equals the tag
+        run: |
+          got=$("dist/$ASSET" --version)
+          want="pulse ${GITHUB_REF_NAME#v}"
+          test "$got" = "$want" || { echo "release: version is $got, tag wants $want" >&2; exit 1; }
+      - name: Upload the binary
+        run: gh release upload "$GITHUB_REF_NAME" "dist/$ASSET"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Write SHA256SUMS and publish
+        run: |
+          mkdir assets && cd assets
+          gh release download "$GITHUB_REF_NAME" --pattern 'pulse-*'
+          sha256sum pulse-linux-x64 pulse-linux-arm64 pulse-darwin-arm64 > SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+
+  verify:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: pulse-linux-x64
+          - runner: ubuntu-24.04-arm
+            asset: pulse-linux-arm64
+          - runner: macos-15
+            asset: pulse-darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ASSET: ${{ matrix.asset }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download, check and run the published asset as documented
+        run: |
+          d=$(mktemp -d)
+          cd "$d"
+          gh release download "$GITHUB_REF_NAME" --pattern "$ASSET" --pattern SHA256SUMS
+          bash "$GITHUB_WORKSPACE/cli/test/verify-download.sh" "$ASSET"
+          chmod +x "$ASSET"
+          got=$("./$ASSET" --version)
+          want="pulse ${GITHUB_REF_NAME#v}"
+          test "$got" = "$want" || { echo "verify: version is $got, tag wants $want" >&2; exit 1; }

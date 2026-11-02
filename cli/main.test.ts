@@ -54,6 +54,21 @@ const CASES: [string, string[]][] = [
   ["channel", ["init", "--yes", "--channel", U]],
   ["checks set", ["init", "--yes", "--checks", U]],
   ["env name", ["init", "--yes", "--channel", "webhook", "--webhook-secret-env", U]],
+  [
+    "env name reaches its validator",
+    [
+      "init",
+      "--yes",
+      "--channel",
+      "webhook",
+      "--webhook-url",
+      "https://hooks.example/in",
+      "--webhook-secret-env",
+      U,
+    ],
+  ],
+  ["tls warn-days", ["init", "--yes", "--check", `type=tls,host=a.example,warn-days=${SECRET}`]],
+  ["domain warn-days", ["init", "--yes", "--check", `type=domain,domain=a.example,warn-days=${U}`]],
   ["extra argument", ["init", "dir", U]],
   ["positional of up", ["up", U]],
   ["unknown command", [U]],
@@ -61,12 +76,21 @@ const CASES: [string, string[]][] = [
   ["option value", ["init", `--yes=${U}`]],
 ];
 
+// Rows whose diagnostic must come from one named validator, so the row cannot pass early.
+const REACHES: Record<string, string> = {
+  "env name reaches its validator": "--webhook-secret-env: must match",
+  "tls warn-days": "warn-days must be an integer",
+  "domain warn-days": "warn-days must be an integer",
+};
+
 describe("diagnostics never disclose user-supplied credentials", () => {
   for (const [name, argv] of CASES) {
     test(name, async () => {
       const { code, out } = await run(argv);
       expect(code).not.toBe(0);
       expect(out).not.toContain(SECRET);
+      const reach = REACHES[name];
+      if (reach !== undefined) expect(out).toContain(reach);
     });
   }
 });
