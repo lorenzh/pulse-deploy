@@ -31,6 +31,9 @@ The config files are full's: `../full/config/api` (checks, mounted read-only as 
 
 ## Start, stop, reset
 
+The `pulse` CLI can write a dev install in its own directory: `pulse init --setup dev --src-dir <dir with the checkouts>`, then `pulse up --timeout 900`. See [docs/cli.md](../docs/cli.md).
+
+
 ```sh
 scripts/init-secrets.sh                            # once: secrets/probe-token, mode 0600
 docker compose -f dev/compose.yaml up -d --build   # rebuild after a change in a checkout
