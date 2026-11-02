@@ -4,7 +4,7 @@ Instructions for coding agents in this repository. They bind every change.
 
 ## Project
 
-pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and status page): `minimal`, `full`, `demo` and `dev`. Work arrives as an issue with an approved spec from the meta repository; implement only the section for this repository. There is no TypeScript and no `package.json`: the repository is Compose files, bash scripts, a few `.mjs` helpers that run in the `oven/bun` image, and JSON config.
+pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and status page): `minimal`, `full`, `demo` and `dev`. Work arrives as an issue with an approved spec from the meta repository; implement only the section for this repository. The repository is Compose files, bash scripts, a few `.mjs` helpers that run in the `oven/bun` image, JSON config, and the `pulse` CLI in `cli/`: TypeScript on Bun, compiled to one binary with `bun run build`.
 
 ## Layout
 
@@ -14,11 +14,13 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 | `minimal/`, `full/`, `demo/`, `dev/` | One setup each: `compose.yaml`, `.env.example`, `README.md`, config files. |
 | `e2e/` | The test-only overlay `compose.e2e.yaml` and `compose-e2e.sh`, the end-to-end test of `full`. |
 | `scripts/` | `init-secrets.sh`, `secrets-init.mjs`, `wait-ready.sh`, `bump-images.sh`, `check-setup.sh`, `measure.sh` and their tests. |
+| `cli/` | The `pulse` CLI (`init`, `up`, `down`, `status`), its `bun test` tests and `cli/test/` (CI scripts, stub docker, hook receiver, timing). |
+| `docs/` | `cli.md`: install, wizard, flags and the way without the CLI. |
 | `secrets/` | Gitignored host secrets, created by `scripts/init-secrets.sh`. |
 
 ## Rules
 
-- Image pins live only in `common/services.yaml`. No other file holds a version or digest of a pinned image, also not a script, test or workflow. Checks test the shape of a pin, never its value. Bump pulse images with `scripts/bump-images.sh`.
+- Image pins live only in `common/services.yaml`. No other file holds a version or digest of a pinned image, also not a script, test or workflow. Checks test the shape of a pin, never its value. Bump pulse images with `scripts/bump-images.sh`. `cli/` holds no image pin: the CLI embeds `common/services.yaml` at build time, and its tests use the fixture `example.invalid/fixture-svc:9.8.7`.
 - Setup services reuse `common/` with `extends: { file: ../common/services.yaml, service: <name> }`. `depends_on`, `ports` and `volumes` go in the setup files. No setup has an `image:` line, except `dev` with `pulse-<svc>:dev`.
 - No `build:` and no `git#` outside `dev`.
 - No published api port outside `minimal`, `dev` and the e2e overlay, and then only on `127.0.0.1`. Every published port is in the table of `README.md` and in `scripts/check-setup.sh`.
@@ -31,6 +33,13 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 
 | Task | Command |
 | --- | --- |
+| CLI lint, typecheck and tests | `bun install --frozen-lockfile && bun run check` |
+| Build the CLI binary | `bun run build` (writes `dist/pulse`) |
+| CLI smoke test (binary on PATH, no Bun) | `bash cli/test/smoke.sh` |
+| CLI Docker failure paths (stub docker) | `bash cli/test/errors.sh dist/pulse` |
+| CLI render variants (Compose) | `bash cli/test/render-variants.sh` |
+| CLI against a live stack | `bash cli/test/stack.sh <demo\|full\|minimal\|dev>` |
+| CLI init timing | `python3 cli/test/measure-init.py` (`--self-test` checks the median rule) |
 | Shell lint | `git ls-files -z '*.sh' \| xargs -0 shellcheck -x` and `git ls-files -z '*.sh' \| xargs -0 -n 1 bash -n` |
 | Helper syntax | `git ls-files -z '*.mjs' \| xargs -0 -n 1 node --check` |
 | JSON syntax | `git ls-files -z '*.json' \| xargs -0 -n 1 jq empty` |
@@ -48,7 +57,7 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 | Start time and RSS | `scripts/measure.sh <setup>` |
 | End-to-end test of `full` (about 4 min) | `bash e2e/compose-e2e.sh` |
 
-CI (`.github/workflows/ci.yml`) runs the jobs `lint`, `pins`, `minimal`, `full` (readiness, then the end-to-end test), `demo`, `dev` (built from each service's `main`, also daily) and, on Monday schedules, `pins-latest`. Run every check of a job that your change touches before handoff, shellcheck from the repository root so `source=` paths resolve.
+CI (`.github/workflows/ci.yml`) runs the jobs `lint`, `pins`, `minimal`, `full` (readiness, then the end-to-end test), `demo`, `dev` (built from each service's `main`, also daily, then `cli/test/stack.sh dev`), `cli-build` (on ubuntu-24.04, ubuntu-24.04-arm and macos-15), `cli-render`, `cli-stack` (demo, full, minimal), `cli-errors` and, on Monday schedules, `pins-latest`. `release.yml` publishes the CLI binaries on a `v*` tag. Run every check of a job that your change touches before handoff, shellcheck from the repository root so `source=` paths resolve.
 
 ## Documentation
 

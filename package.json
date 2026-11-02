@@ -1,0 +1,29 @@
+{
+  "name": "@lorenzh/pulse-deploy",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "The pulse CLI: writes, starts and checks a Docker Compose installation of pulse.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "bun": "1.4.0"
+  },
+  "scripts": {
+    "typecheck": "bun node_modules/typescript7/bin/tsc --noEmit",
+    "test": "bun test --coverage cli",
+    "lint": "biome check . && pulse-eslint . && pulse-workflows",
+    "format": "biome check --write .",
+    "build": "bun build --compile --minify cli/main.ts --outfile dist/pulse",
+    "prepare": "lefthook install || true",
+    "check": "bun run lint && bun run typecheck && bun run test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.3",
+    "@lorenzh/pulse-config": "github:lorenzh/pulse-config#04108fa0c67d9a79c0f6d1ade4dd78df3ad8a4a7",
+    "@types/bun": "1.4.0",
+    "@types/node": "26.6.6",
+    "lefthook": "2.2.2",
+    "typescript7": "npm:typescript@7.0.2"
+  },
+  "packageManager": "bun@1.4.0"
+}

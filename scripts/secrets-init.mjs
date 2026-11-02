@@ -1,6 +1,9 @@
 // Runs in the one-shot secrets-init service (oven/bun, root, no network).
 // Files mode (default): reads /in/probe-token and writes /out/api/tokens.json and
-// /out/probe/probe-token. Generate mode (PULSE_SECRETS_MODE=generate, the demo): keeps or
+// /out/probe/probe-token. With PULSE_PROBE_LOCATIONS=<loc>[,<loc>…] it reads
+// /in/probe-token-<loc> instead and writes /out/probe-<loc>/probe-token per location. With
+// PULSE_SECRETS_ADMIN=on it also reads /in/admin-token and writes /out/api/admin-tokens.json and,
+// when /out/console exists, /out/console/admin-token. Generate mode (PULSE_SECRETS_MODE=generate, the demo): keeps or
 // creates one random token per location in PULSE_DEMO_LOCATIONS and writes /out/api/tokens.json.
 // Every output file is owned by 1000:1000 (the container user bun) with mode 0400 and is
 // written through a temp file and a rename. No message ever holds a token.
@@ -66,11 +69,51 @@ function tokensJson(entries) {
   return `${JSON.stringify({ tokens: entries.map(({ location, token }) => ({ location, token })) })}\n`;
 }
 
+function adminEnabled(env) {
+  const value = env.PULSE_SECRETS_ADMIN;
+  if (value === undefined || value === "off") return false;
+  if (value === "on") return true;
+  fail("PULSE_SECRETS_ADMIN", "must be on or off");
+}
+
+function isDirectory(path) {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Reads and validates every input before the first write, so a refused run writes no file. */
 function filesMode(env) {
-  const token = readHostToken("/in/probe-token");
-  const location = env.PULSE_LOCATION || "default";
-  writeSecret("/out/api/tokens.json", tokensJson([{ location, token }]));
-  writeSecret("/out/probe/probe-token", token);
+  const admin = adminEnabled(env);
+  const list = env.PULSE_PROBE_LOCATIONS;
+  const entries = [];
+  const writes = [];
+  if (list === undefined || list === "") {
+    const token = readHostToken("/in/probe-token");
+    entries.push({ location: env.PULSE_LOCATION || "default", token });
+    writes.push(["/out/probe/probe-token", token]);
+  } else {
+    const locations = list.split(",").map((l) => l.trim());
+    for (const location of locations) {
+      if (!LOCATION_PATTERN.test(location)) fail("PULSE_PROBE_LOCATIONS", "each location must match [a-z0-9][a-z0-9-]{0,31}");
+    }
+    if (new Set(locations).size !== locations.length) fail("PULSE_PROBE_LOCATIONS", "lists a location twice");
+    for (const location of locations) {
+      const token = readHostToken(`/in/probe-token-${location}`);
+      entries.push({ location, token });
+      writes.push([`/out/probe-${location}/probe-token`, token]);
+    }
+  }
+  if (admin) {
+    const token = readHostToken("/in/admin-token");
+    if (entries.some((e) => e.token === token)) fail("/in/admin-token", "must differ from every probe token");
+    writes.push(["/out/api/admin-tokens.json", `${JSON.stringify({ tokens: [{ name: "admin", token }] })}\n`]);
+    if (isDirectory("/out/console")) writes.push(["/out/console/admin-token", token]);
+  }
+  writeSecret("/out/api/tokens.json", tokensJson(entries));
+  for (const [file, content] of writes) writeSecret(file, content);
 }
 
 function existingToken(file) {

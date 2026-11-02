@@ -51,5 +51,6 @@ const config = {
   ],
 };
 
-writeFileSync("/shared/checks.json", `${JSON.stringify(config, null, 2)}\n`);
-console.log("demo-init: wrote /shared/checks.json");
+const file = process.env.PULSE_DEMO_CHECKS_FILE || "/shared/checks.json";
+writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+console.log(`demo-init: wrote ${file}`);

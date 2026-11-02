@@ -13,6 +13,9 @@ permissions:
   contents: read
 
 jobs:
+  check:
+    uses: lorenzh/pulse-config/.github/workflows/check.yml@04108fa0c67d9a79c0f6d1ade4dd78df3ad8a4a7
+
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -225,6 +228,17 @@ jobs:
         if: always()
         working-directory: pulse-deploy
         run: docker compose -f dev/compose.yaml down -v --remove-orphans
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - name: Install the CLI dependencies
+        working-directory: pulse-deploy
+        run: bun install --frozen-lockfile
+      - name: pulse CLI against the dev setup (source CLI)
+        working-directory: pulse-deploy
+        env:
+          PULSE_SRC_DIR: ${{ github.workspace }}
+        run: bash cli/test/stack.sh dev
 
   pins-latest:
     if: github.event_name == 'schedule'
@@ -238,3 +252,127 @@ jobs:
         run: |
           if [[ "$(date -u +%u)" != "1" ]]; then echo "not Monday: skipped"; exit 0; fi
           scripts/bump-images.sh --check-latest
+
+  cli-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: pulse-linux-x64
+          - runner: ubuntu-24.04-arm
+            asset: pulse-linux-arm64
+          - runner: macos-15
+            asset: pulse-darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      ASSET: ${{ matrix.asset }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Compile the native binary
+        run: bun build --compile --minify cli/main.ts --outfile "dist/$ASSET"
+      - name: Sign ad hoc when macOS refuses to run it
+        if: runner.os == 'macOS'
+        run: |
+          if "dist/$ASSET" --version >/dev/null 2>&1; then
+            echo "- macOS: the binary ran unsigned; codesign was not needed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            codesign --sign - "dist/$ASSET"
+            echo "- macOS: codesign ad hoc was needed" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Smoke test without Bun on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cp "dist/$ASSET" "$RUNNER_TEMP/bin/pulse"
+          env -i PATH="$RUNNER_TEMP/bin:/usr/bin:/bin" HOME="$HOME" bash cli/test/smoke.sh
+      - name: Documented download check (OK, changed byte, unlisted asset)
+        run: |
+          w="$RUNNER_TEMP/verify"
+          mkdir -p "$w"
+          cp "dist/$ASSET" "$w/$ASSET"
+          cd "$w"
+          e=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+          if command -v sha256sum >/dev/null 2>&1; then own=$(sha256sum "$ASSET"); else own=$(shasum -a 256 "$ASSET"); fi
+          {
+            echo "${own%% *}  $ASSET"
+            for other in pulse-linux-x64 pulse-linux-arm64 pulse-darwin-arm64; do
+              [[ "$other" == "$ASSET" ]] || echo "$e  $other"
+            done
+          } > SHA256SUMS
+          out=$(bash "$GITHUB_WORKSPACE/cli/test/verify-download.sh" "$ASSET")
+          test "$out" = "$ASSET: OK"
+          cp "$ASSET" x
+          printf 'X' | dd of="$ASSET" bs=1 seek=100 conv=notrunc 2>/dev/null
+          set +e
+          bash "$GITHUB_WORKSPACE/cli/test/verify-download.sh" "$ASSET"; changed=$?
+          bash "$GITHUB_WORKSPACE/cli/test/verify-download.sh" x; unlisted=$?
+          set -e
+          test "$changed" = 1 && test "$unlisted" = 1
+          echo "verify-download: OK 0, changed byte 1, unlisted asset 1"
+      - name: Binary size and init time
+        run: |
+          bytes=$(wc -c < "dist/$ASSET" | tr -d ' ')
+          mib=$(awk -v b="$bytes" 'BEGIN { printf "%.1f", b / 1048576 }')
+          {
+            echo "- ${{ matrix.runner }}: $ASSET is $bytes bytes ($mib MiB) and ran natively"
+            python3 cli/test/measure-init.py "dist/$ASSET" "${{ matrix.runner }}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Self-test of the median rule
+        run: python3 cli/test/measure-init.py --self-test
+
+  cli-render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Render 8 variants and check them
+        run: bash cli/test/render-variants.sh
+
+  cli-stack:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [demo, full, minimal]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - name: pulse CLI against a live ${{ matrix.variant }} stack
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: bash cli/test/stack.sh "$VARIANT"
+
+  cli-errors:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - name: Docker failure paths with the stub docker
+        run: bash cli/test/errors.sh dist/pulse

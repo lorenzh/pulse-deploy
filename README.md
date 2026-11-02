@@ -42,6 +42,19 @@ docker compose -f dev/compose.yaml up -d --build
 
 Each setup sets its project name with a top-level `name:`. So `cd full && docker compose ps` and `docker compose -f full/compose.yaml ps` from the repository root address the same project. `minimal` and `full` are the project `pulse`, `demo` is `pulse-demo` and `dev` is `pulse-dev`. Run one `pulse` setup at a time.
 
+## pulse CLI
+
+The `pulse` CLI writes one install directory with its own `compose.yaml`, config and secrets, then starts, stops and checks it:
+
+```sh
+pulse init     # asks for the setup, ports, URLs, checks and channels
+pulse up       # docker compose up -d, then waits until every service is ready
+pulse status   # state, version and URL of each service
+pulse down     # stops the containers and keeps the data volumes
+```
+
+The install directory works with plain `docker compose` too. Install, the prompts, flags and exit codes are in [docs/cli.md](docs/cli.md). The CLI's own code is in `cli/`. It holds no image pin: it embeds `common/services.yaml` at build time.
+
 ## Secrets
 
 No setup holds a token, password or secret. The probe token lives in one host file:
