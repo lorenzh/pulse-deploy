@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Stub docker for cli/test/errors.sh. STUB_MODE selects the failure:
+#   daemon      `docker version` fails as if the daemon is down
+#   old-compose `docker compose version --short` prints 2.22.0
+#   hang        every `docker compose ... exec` sleeps 600 s
+# STUB_CONFIG names the JSON file that `docker compose ... config` prints.
+# Image references use the synthetic fixture example.invalid/fixture-svc:9.8.7 (plan decision 3).
+set -euo pipefail
+
+mode="${STUB_MODE:-}"
+
+if [[ "${1:-}" == "version" ]]; then
+  if [[ "$mode" == "daemon" ]]; then
+    echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock" >&2
+    exit 1
+  fi
+  echo "27.0.0"
+  exit 0
+fi
+
+if [[ "${1:-}" == "ps" ]]; then exit 0; fi
+if [[ "${1:-}" == "volume" ]]; then
+  if [[ "${2:-}" == "inspect" ]]; then
+    echo "Error: No such volume" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+if [[ "${1:-}" != "compose" ]]; then
+  echo "stub docker: unsupported call: $1" >&2
+  exit 2
+fi
+shift
+
+args=("$@")
+for arg in "${args[@]}"; do
+  case "$arg" in
+    version)
+      if [[ "$mode" == "old-compose" ]]; then echo "2.22.0"; else echo "2.30.0"; fi
+      exit 0
+      ;;
+    config)
+      cat "${STUB_CONFIG:?STUB_CONFIG is not set}"
+      exit 0
+      ;;
+    up) exit 0 ;;
+    ps)
+      echo '[{"Service":"api","State":"running","Health":"","ExitCode":0,"Image":"example.invalid/fixture-svc:9.8.7"},{"Service":"secrets-init","State":"exited","Health":"","ExitCode":0,"Image":"example.invalid/fixture-svc:9.8.7"}]'
+      exit 0
+      ;;
+    exec)
+      if [[ "$mode" == "hang" ]]; then exec sleep 600; fi
+      printf '200\nok'
+      exit 0
+      ;;
+  esac
+done
+echo "stub docker: unsupported compose call" >&2
+exit 2
