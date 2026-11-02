@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { lstatSync, mkdtempSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shown } from "./args.ts";
@@ -69,6 +69,7 @@ const CASES: [string, string[]][] = [
   ],
   ["tls warn-days", ["init", "--yes", "--check", `type=tls,host=a.example,warn-days=${SECRET}`]],
   ["domain warn-days", ["init", "--yes", "--check", `type=domain,domain=a.example,warn-days=${U}`]],
+  ["query in url", ["init", "--yes", "--check", `url=https://monitor.example/p?token=${SECRET}`]],
   ["extra argument", ["init", "dir", U]],
   ["positional of up", ["up", U]],
   ["unknown command", [U]],
@@ -81,6 +82,7 @@ const REACHES: Record<string, string> = {
   "env name reaches its validator": "--webhook-secret-env: must match",
   "tls warn-days": "warn-days must be an integer",
   "domain warn-days": "warn-days must be an integer",
+  "query in url": "--check #1: url must not have a query; edit config/api/checks.json",
 };
 
 describe("diagnostics never disclose user-supplied credentials", () => {
@@ -92,6 +94,28 @@ describe("diagnostics never disclose user-supplied credentials", () => {
       const reach = REACHES[name];
       if (reach !== undefined) expect(out).toContain(reach);
     });
+  }
+});
+
+test("a check url with a query writes no file and never echoes it", async () => {
+  const d = mkdtempSync(join(tmpdir(), "pulse-query-"));
+  try {
+    const url = `https://monitor.example/p?token=${SECRET}`;
+    const { code, out } = await run([
+      "init",
+      d,
+      "--setup",
+      "full",
+      "--yes",
+      "--check",
+      `url=${url}`,
+    ]);
+    expect(code).toBe(2);
+    expect(out).toContain("url must not have a query");
+    expect(out).not.toContain(SECRET);
+    expect(readdirSync(d)).toEqual([]);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
   }
 });
 

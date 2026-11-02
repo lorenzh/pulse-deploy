@@ -126,7 +126,7 @@ pulse init --check type=tls,host=example.com,warn-days=14
 pulse init --check type=domain,domain=example.com,warn-days=30
 ```
 
-URLs may not hold a user name or password. Error messages name the flag and its position (`--check #2`), never the value you passed.
+URLs may not hold a user name or password. Check URLs may not hold a query in `--check` or the wizard. Literal URLs, including those added by hand, are clear text in `config/api/checks.json`, mode 0644. A check `name` is public on the status page and defaults to the target, so pass `name=` for a private target. Error messages name the flag and its position (`--check #2`), never the value you passed.
 
 `pulse up [--dir <dir>] [--timeout <s>]` waits up to `--timeout` seconds (1 to 3600, default 300). `pulse down [--dir <dir>] [--volumes]`. `pulse status [--dir <dir>] [--json]`.
 
@@ -171,7 +171,7 @@ The SMTP password and the webhook signing secret are never written to a file. `-
 
 `pulse up` refuses to start and names the missing variable when one is not set. Names must match `[A-Z_][A-Z0-9_]{0,63}` and may not start with `PULSE_` or `COMPOSE_`.
 
-Heartbeat checks and header secrets of checks are not asked by the CLI. Add them to `config/api/checks.json` by hand, following the api's check format, and keep the secret values in `.env`.
+Heartbeat checks and header secrets of checks are not asked by the CLI. Add them to `config/api/checks.json` by hand, following the api's check format. Keep a header secret value in `.env` and also pass it to every probe in `compose.override.yaml`, under `services.<probe>.environment`, as `PULSE_HEADER_<NAME>: "${PULSE_HEADER_<NAME>}"`. A value only in `.env` does not reach the probe: the check stays `unknown` and the probe logs `skipping check ... is not set`. The name must start with `PULSE_HEADER_`.
 
 ## Backups and `--force`
 

@@ -218,7 +218,12 @@ const CHECK_TYPES: Record<
     build: (label, f, base) => {
       const url = f.get("url") ?? "";
       if (/\s/.test(url)) return refuse(`${label}: url must not contain whitespace`);
-      parseUrl(`${label}: url`, url);
+      const parsed = parseUrl(`${label}: url`, url);
+      if (parsed.search !== "" || url.includes("?")) {
+        return refuse(
+          `${label}: url must not have a query; edit config/api/checks.json for such a URL`,
+        );
+      }
       return { check: { ...base, type: "http", name: "", url }, target: url };
     },
   },

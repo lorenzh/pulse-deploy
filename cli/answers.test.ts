@@ -279,6 +279,18 @@ describe("--check", () => {
     );
   });
 
+  test("an http url with a query is refused without echoing it", () => {
+    const message = refused(() =>
+      parseCheck("url=https://monitor.example/p?token=credential-sentinel-529"),
+    );
+    expect(message).toBe(
+      "--check #1: url must not have a query; edit config/api/checks.json for such a URL",
+    );
+    expect(refused(() => parseCheck("url=https://monitor.example/p?"))).toContain(
+      "must not have a query",
+    );
+  });
+
   test("an http url may contain an apostrophe", () => {
     expect(parseCheck("url=https://example.com/what's-new").check).toMatchObject({
       type: "http",
