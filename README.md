@@ -75,7 +75,10 @@ A missing `secrets/` directory makes `up` fail with `bind source path does not e
 
 `secrets-init` runs as root with no network and only the capabilities `CHOWN`, `DAC_OVERRIDE` and `FOWNER`, because the host file's owner and mode survive a bind mount. The demo has no host secret: its `secrets-init` generates one token per location and keeps them on a rerun.
 
-To rotate the probe token: delete `secrets/probe-token`, run `scripts/init-secrets.sh`, then `docker compose -f <setup>/compose.yaml up -d --force-recreate`.
+Token rotation depends on the api version:
+
+- With the pinned api `0.1.0`, which reads its token files at every start: to rotate the probe token, delete `secrets/probe-token`, run `scripts/init-secrets.sh`, then `docker compose -f <setup>/compose.yaml up -d --force-recreate`.
+- With an api that has the database token store (every pulse-api build after `0.1.0` that contains the store): the api imports the token files once, at its first start, and then ignores them. A new file value alone locks the probe or console out (`401`). To rotate a probe or admin token, call `POST /admin/tokens/<id>/rotate` (see [token rotation](https://github.com/lorenzh/pulse-api/blob/main/docs/operation.md#token-rotation)). Within the 10-minute overlap, write the returned secret into `secrets/probe-token[-<location>]` or `secrets/admin-token` (mode 0600), then `docker compose -f <setup>/compose.yaml up -d --force-recreate`. `secrets-init` copies it to the probe or console.
 
 ## Host ports
 

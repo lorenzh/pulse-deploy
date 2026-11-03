@@ -55,4 +55,4 @@ services:
 configs:
   admin-tokens:
     content: |
-      {"tokens": [{"name": "e2e", "token": "${E2E_ADMIN_TOKEN:-e2e-admin-token-sentinel-0123}"}]}
+      {"tokens": [{"name": "e2e", "token": "${E2E_ADMIN_TOKEN:-e2e-admin-token-sentinel-0123456789abcdef}"}]}

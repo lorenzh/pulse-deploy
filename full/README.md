@@ -85,6 +85,8 @@ sudo chmod 0400 secrets/admin/admin-tokens.json
 sudo chmod 0500 secrets/admin
 ```
 
+An api with the database token store (every pulse-api build after `0.1.0` that contains the store) needs at least 32 characters per admin token; `openssl rand -hex 32` gives 64. That api reads the file only at its first start and imports the tokens into its database. Later changes to the file are ignored; rotate admin tokens over HTTP as the [token rotation docs](https://github.com/lorenzh/pulse-api/blob/main/docs/operation.md#token-rotation) describe. The pinned api `0.1.0` reads the file at every start.
+
 Then add `full/compose.override.yaml`:
 
 ```yaml

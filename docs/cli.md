@@ -160,7 +160,10 @@ Image references in `compose.yaml` look like `ghcr.io/lorenzh/pulse-api:<version
 - Each token is 64 lower-case hex characters (32 random bytes): `secrets/admin-token` and one `secrets/probe-token-<location>` per probe location.
 - `secrets-init` copies them into the containers' secret volumes at each start. No token is in `compose.yaml`, `.env` or `pulse.json`, and the CLI never prints one.
 - `pulse init --force` keeps every valid token file (at least 16 printable characters and no placeholder). It does not rotate tokens.
-- To rotate a token by hand: write a new value into its file (`openssl rand -hex 32 > secrets/admin-token`, mode 0600), then `pulse down && pulse up`. `secrets-init` copies the new value at the start.
+- An api with the database token store (every pulse-api build after `0.1.0` that contains the store) needs at least 32 characters for an admin token at its first import. The CLI generates 64.
+- Rotation depends on the api version:
+  - With the pinned api `0.1.0`, which reads its token files at every start: to rotate the admin or a probe token, write a new value into its file (`openssl rand -hex 32 > secrets/admin-token`, mode 0600), then `pulse down && pulse up`. `secrets-init` copies the new value at the start.
+  - With an api that has the database token store: the api imports the token files once, at its first start, and then ignores them. A new file value alone locks the probe or console out (`401`). To rotate the admin or a probe token, call `POST /admin/tokens/<id>/rotate` (see [token rotation](https://github.com/lorenzh/pulse-api/blob/main/docs/operation.md#token-rotation)). Within the 10-minute overlap, write the returned secret into `secrets/admin-token` or `secrets/probe-token-<location>` (mode 0600), then `pulse down && pulse up`. `secrets-init` copies it to the console or probe.
 
 ### Secret variables
 
