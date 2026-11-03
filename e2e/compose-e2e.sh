@@ -267,6 +267,21 @@ manual_count() { # manual_count <file> <key>: lines of a notify channel file wit
 
 manual_sent() { [[ "$(manual_count "$1" "$2")" == "1" ]]; }
 
+manual_update_count() { # manual_update_count <file> <id>: update lines of one manual incident
+  # Notify writes manual:<id>:update:<n> (0.1.0) or manual:<id>:update:<32 hex> (main).
+  [[ "$2" =~ ^[0-9]+$ ]] || { echo 0; return 1; }
+  docker compose exec -T notify cat "/data/$1" 2>/dev/null |
+    grep -cE -- "\"key\":\"manual:$2:update:[0-9a-f]+\"" || true
+}
+
+manual_update_sent() { [[ "$(manual_update_count "$1" "$2")" == "1" ]]; }
+
+manual_update_key() { # manual_update_key <file> <id>: the matched update key only, never a whole line
+  [[ "$2" =~ ^[0-9]+$ ]] || return 1
+  docker compose exec -T notify cat "/data/$1" 2>/dev/null |
+    grep -oE -- "\"key\":\"manual:$2:update:[0-9a-f]+\"" | head -n 1 | grep -oE -- "manual:$2:update:[0-9a-f]+"
+}
+
 published_port() { # published_port <service> <container port>
   # Ask Compose: it also reads full/.env, which the shell environment does not hold.
   local out
@@ -498,7 +513,9 @@ wait_for "$T_NOTIFY" "notify sent manual:${manual_id}:opened to the web channel"
 
 sleep 1
 manual_call POST "/manual-incidents/${manual_id}/updates" '{"status":"identified","message":"Cause found."}' >/dev/null
-wait_for "$T_NOTIFY" "notify sent manual:${manual_id}:update:1" manual_sent manual-web.jsonl "manual:${manual_id}:update:1"
+wait_for "$T_NOTIFY" "notify sent manual:${manual_id}:update:<hex> to the web channel" \
+  manual_update_sent manual-web.jsonl "$manual_id"
+echo "ok: notify sent the update as $(manual_update_key manual-web.jsonl "$manual_id")"
 wait_for "$T_PAGE" "the status service serves the latest update" proxy_has_text "Cause found."
 sleep 1
 manual_call POST "/manual-incidents/${manual_id}/updates" '{"status":"resolved","message":"Fixed."}' >/dev/null
@@ -518,20 +535,24 @@ wait_for "$T_PAGE" "the feed has manual:${manual_id}:2" feed_has "manual:${manua
 [[ "$(manual_count manual-public-api.jsonl "manual:${manual_id}:opened")" == "0" ]] ||
   fail "the public-api channel got an incident of component web"
 echo "ok: component routing: web channel got the events, public-api channel none"
-for key in opened update:1 resolved; do
+for key in opened resolved; do
   [[ "$(manual_count incidents.jsonl "manual:${manual_id}:${key}")" == "1" ]] ||
     fail "the catch-all channel does not hold manual:${manual_id}:${key} exactly once"
 done
+[[ "$(manual_update_count incidents.jsonl "$manual_id")" == "1" ]] ||
+  fail "the catch-all channel does not hold the update of manual:${manual_id} exactly once"
 echo "ok: one ledger entry per event, sent once"
 
 docker compose restart notify
 wait_for "$T_UP" "notify is healthy after the restart" is_healthy notify
 wait_for "$T_NOTIFY" "notify has polled again" notify_has_polled
 sleep $((POLL_INTERVAL * 3))
-for key in opened update:1 resolved; do
+for key in opened resolved; do
   [[ "$(manual_count manual-web.jsonl "manual:${manual_id}:${key}")" == "1" ]] ||
     fail "manual:${manual_id}:${key} was sent again after a notify restart"
 done
+[[ "$(manual_update_count manual-web.jsonl "$manual_id")" == "1" ]] ||
+  fail "the update of manual:${manual_id} was sent again after a notify restart (web channel)"
 echo "ok: a notify restart sends nothing twice"
 
 metric_is pulse_api_manual_incidents_created_total 1 || fail "pulse_api_manual_incidents_created_total is not 1"
