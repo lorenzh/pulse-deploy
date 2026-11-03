@@ -39,6 +39,9 @@ services:
       # Resolved by the probe for the header {"env": "PULSE_HEADER_SVC_TOKEN"} of the check e2e-post.
       # The env value is the whole header value, so it carries the "Bearer " scheme.
       PULSE_HEADER_SVC_TOKEN: Bearer ${E2E_SVC_TOKEN:-e2e-svc-token-sentinel}
+      # Probe main sends an env header only to a host bound here. Older probes ignore this variable.
+      # The value names the variable and the host only, never the secret.
+      PULSE_PROBE_HEADER_HOSTS: '{"PULSE_HEADER_SVC_TOKEN":["e2e-target"]}'
     depends_on:
       e2e-target:
         condition: service_started
