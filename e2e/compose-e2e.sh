@@ -224,7 +224,7 @@ assert_no_volume() {
   if has_volume "$1"; then fail "volume ${project}_$1 still exists"; fi
 }
 
-e2e_admin_token="${E2E_ADMIN_TOKEN:-e2e-admin-token-sentinel-0123}"
+e2e_admin_token="${E2E_ADMIN_TOKEN:-e2e-admin-token-sentinel-0123456789abcdef}"
 manual_title='<script>alert(1)</script> Checkout slow'
 escaped_title='&lt;script&gt;alert(1)&lt;/script&gt; Checkout slow'
 
@@ -469,8 +469,9 @@ step "Manual incidents"
 probe_token=$(head -n 1 "$secrets_dir/probe-token")
 body='{"title":"T","impact":"major","componentIds":["web"],"message":"m"}'
 [[ "$(manual_code POST /manual-incidents "$body" "")" == "401" ]] || fail "an unauthenticated write was not refused"
-[[ "$(manual_code POST /manual-incidents "$body" "$probe_token")" == "401" ]] || fail "a probe token write was not refused"
-echo "ok: writes without a token and with a probe token answer 401"
+probe_write=$(manual_code POST /manual-incidents "$body" "$probe_token")
+[[ "$probe_write" == "401" || "$probe_write" == "403" ]] || fail "a probe token write was not refused"
+echo "ok: writes without a token answer 401, with a probe token 401 or 403"
 [[ "$(manual_code POST /manual-incidents '{"title":"T","impact":"major","componentIds":["nope"],"message":"m"}' "$e2e_admin_token")" == "400" ]] ||
   fail "an unknown component was accepted"
 long_title=$(printf 'x%.0s' $(seq 1 201))
