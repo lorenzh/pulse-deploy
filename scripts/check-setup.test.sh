@@ -83,17 +83,17 @@ expect_fail "a copy of the api pin as image in demo" 3 \
 expect_fail "a copy of the api pin anywhere in demo" 4 \
   "line=\$(grep -oE '${pin}' common/services.yaml); printf '# %s\\n' \"\$line\" >>demo/compose.yaml"
 expect_fail "an admin token config inside /run/pulse" 8 \
-  "sed -i 's#target: /run/pulse-admin/admin-tokens.json#target: /run/pulse/admin-tokens.json#' e2e/compose.e2e.yaml"
-expect_fail "a service-level tmpfs at /run/pulse on console in full" 8 \
-  "sed -i '/service: console }/a\\    tmpfs: [\"/run/pulse\"]' full/compose.yaml"
+  "sed -i '/^  api:\$/a\\    configs: [{ source: admin-tokens, target: /run/pulse/admin-tokens.json }]' e2e/compose.e2e.yaml; printf 'configs:\\n  admin-tokens:\\n    content: \"[]\"\\n' >>e2e/compose.e2e.yaml"
+expect_fail "a service-level tmpfs at /run/pulse on status in full" 8 \
+  "sed -i '/service: status }/a\\    tmpfs: [\"/run/pulse\"]' full/compose.yaml"
 expect_fail "a service-level tmpfs below /run/pulse with options in full" 8 \
-  "sed -i '/service: console }/a\\    tmpfs: \"/run/pulse/x:size=1m\"' full/compose.yaml"
-expect_fail "a tmpfs at /run//pulse on console in full" 8 \
-  "sed -i '/service: console }/a\\    tmpfs: [\"/run//pulse\"]' full/compose.yaml"
-expect_fail "a tmpfs at /tmp/../run/./pulse/ on console in full" 8 \
-  "sed -i '/service: console }/a\\    tmpfs: [\"/tmp/../run/./pulse/\"]' full/compose.yaml"
-expect_fail "a tmpfs at /var/run/pulse on console in full" 8 \
-  "sed -i '/service: console }/a\\    tmpfs: [\"/var/run/pulse\"]' full/compose.yaml"
+  "sed -i '/service: status }/a\\    tmpfs: \"/run/pulse/x:size=1m\"' full/compose.yaml"
+expect_fail "a tmpfs at /run//pulse on status in full" 8 \
+  "sed -i '/service: status }/a\\    tmpfs: [\"/run//pulse\"]' full/compose.yaml"
+expect_fail "a tmpfs at /tmp/../run/./pulse/ on status in full" 8 \
+  "sed -i '/service: status }/a\\    tmpfs: [\"/tmp/../run/./pulse/\"]' full/compose.yaml"
+expect_fail "a tmpfs at /var/run/pulse on status in full" 8 \
+  "sed -i '/service: status }/a\\    tmpfs: [\"/var/run/pulse\"]' full/compose.yaml"
 expect_fail "a tmpfs at /var/run//pulse/x on api in full" 8 \
   "sed -i '/service: api }/a\\    tmpfs: [\"/var/run//pulse/x\"]' full/compose.yaml"
 expect_fail "secrets/ not ignored" 6 \
