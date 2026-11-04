@@ -1,7 +1,8 @@
+/* eslint-disable sonarjs/no-clear-text-protocols -- URL fixtures for stderr masking, never requested */
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { composeVersionOk, readDotEnv, stripEnv } from "./docker.ts";
+import { composeVersionOk, firstLine, maskUserInfo, readDotEnv, stripEnv } from "./docker.ts";
 import { runDown, runUp } from "./lifecycle.ts";
 import { runStatus } from "./status.ts";
 import {
@@ -9,6 +10,7 @@ import {
   type Captured,
   capture,
   DEMO_SERVICES,
+  type FailCall,
   type FakeOpts,
   goodConfig,
   INSTALL_ID,
@@ -353,4 +355,82 @@ describe("project resolution and guard", () => {
     expect(await runStatus(d, false, c2.deps)).toBe(1);
     expect(c2.err.join("\n")).toContain("is not a pulse installation");
   });
+});
+
+describe("URL user info in diagnostics", () => {
+  const SENT = "open /x/http:/u:SENTINEL@127.0.0.1:1/x.yaml: no such file or directory";
+  const MASKED = "open /x/http:/(hidden)@127.0.0.1:1/x.yaml: no such file or directory";
+  const rows: [string, string][] = [
+    [SENT, MASKED],
+    ["get http://u:SENTINEL@h:1/x", "get http://(hidden)@h:1/x"],
+    ["HTTPS://u:SENTINEL@h/x", "HTTPS://(hidden)@h/x"],
+    ["a https://u:S1@h/x b http:/v:S2@g/y", "a https://(hidden)@h/x b http:/(hidden)@g/y"],
+    ["http://SENTINEL@h/x", "http://(hidden)@h/x"],
+    ["http://:SENTINEL@h/x", "http://(hidden)@h/x"],
+    ["http://SENTINEL:@h/x", "http://(hidden)@h/x"],
+    ["http://%53ENTINEL:%70w@h/x", "http://(hidden)@h/x"],
+    ["http://u:p@SENTINEL@h/x", "http://(hidden)@h/x"],
+    ["http://u:$&$1SENTINEL@h/x", "http://(hidden)@h/x"],
+    ["http://h:1/a@b", "http://h:1/a@b"],
+    ["http:/h/a@b c", "http:/h/a@b c"],
+    [
+      "open /srv/pulse/compose.override.yaml: no such file or directory",
+      "open /srv/pulse/compose.override.yaml: no such file or directory",
+    ],
+    ["mail ops@example.com failed", "mail ops@example.com failed"],
+    [
+      "pull ghcr.io/lorenzh/pulse-api@sha256:abc failed",
+      "pull ghcr.io/lorenzh/pulse-api@sha256:abc failed",
+    ],
+    [
+      "Error response from daemon: get pulse_x: no such volume",
+      "Error response from daemon: get pulse_x: no such volume",
+    ],
+    ["http://@h/x", "http://@h/x"],
+    // Security extras: mixed case, compound scheme, raw @ in single-slash form.
+    ["HtTp://U:P@h", "HtTp://(hidden)@h"],
+    ["git+ssh://tok@h", "git+ssh://(hidden)@h"],
+    ["http:/u:p@ss@h/x", "http:/(hidden)@h/x"],
+  ];
+  for (const [i, [input, expected]] of rows.entries())
+    test(`maskUserInfo row ${i + 1}`, () => {
+      expect(maskUserInfo(input)).toBe(expected);
+    });
+
+  test("a 1,000,000-character line stays linear", () => {
+    const line = `http://${"a".repeat(1_000_000)}`;
+    const t = performance.now();
+    expect(maskUserInfo(line)).toBe(line);
+    expect(performance.now() - t).toBeLessThan(1000);
+  });
+
+  test("firstLine picks the first nonblank line, then masks it", () => {
+    expect(firstLine("")).toBe("");
+    expect(firstLine("\n  \n")).toBe("");
+    expect(firstLine("\n\nhttp:/u:SENTINEL@h/x\nhttp://v:LATER@g\n")).toBe("http:/(hidden)@h/x");
+    expect(firstLine("plain error\nhttp://u:SENTINEL@h\n")).toBe("plain error");
+  });
+
+  const diag: [FailCall, string, number][] = [
+    ["version", "cannot reach the Docker daemon: ", 3],
+    ["config", "docker compose config failed: ", 1],
+    ["ps", "docker ps failed: ", 1],
+    ["volume ls", "docker volume ls failed: ", 1],
+    ["volume inspect", "docker volume inspect failed: ", 1],
+  ];
+  for (const [call, prefix, code] of diag)
+    test(`${call} failure masks user info and exits ${code}`, async () => {
+      const d = install({ env: "" });
+      for (const cmd of COMMANDS) {
+        const c = capture({ fail: { call, stderr: SENT }, ps: () => READY_PS });
+        expect(await run(cmd, d, c)).toBe(code);
+        const err = c.err.join("\n");
+        expect(err).toContain(`${prefix}${MASKED}`);
+        expect(err).not.toContain("SENTINEL");
+        expect(err).not.toContain("no such volume");
+        expect(c.out.join("\n")).not.toContain("SENTINEL");
+        if (call === "volume inspect")
+          expect(c.calls.some((x) => x.argv.at(-1) === "pulse-demo_api-data")).toBe(true);
+      }
+    });
 });

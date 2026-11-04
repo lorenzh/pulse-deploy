@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shown } from "./args.ts";
 import { main } from "./main.ts";
+import { fakeDocker, makeInstall } from "./test/fake-docker.ts";
 
 const SECRET = "credential-sentinel-529";
 const U = `https://ops:${SECRET}@monitor.example/p?token=${SECRET}#${SECRET}`;
@@ -161,4 +162,35 @@ describe("real dependencies", () => {
       expect(out).toContain("Docker is not installed or not on PATH");
     }
   });
+});
+
+test("redacts URL user info in Compose config diagnostics", async () => {
+  const dir = makeInstall({ env: "" });
+  try {
+    const { spawn } = fakeDocker({
+      fail: {
+        call: "config",
+        stderr: "open /x/http:/u:SENTINEL@127.0.0.1:1/x.yaml: no such file or directory",
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    const io = {
+      stdout: (t: string): void => {
+        stdout += t;
+      },
+      stderr: (t: string): void => {
+        stderr += t;
+      },
+    };
+    const code = await main(["status", "--dir", dir], io, {}, { spawn, env: { PATH: "/usr/bin" } });
+    expect(code).toBe(1);
+    expect(stderr).not.toContain("SENTINEL");
+    expect(stdout).not.toContain("SENTINEL");
+    expect(stderr).toContain(
+      "pulse status: docker compose config failed: open /x/http:/(hidden)@127.0.0.1:1/x.yaml: no such file or directory",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
