@@ -60,6 +60,7 @@ expected="./.env 600
 ./pulse.json 644
 ./secrets 700
 ./secrets/admin-token 600
+./secrets/console-secret-key 600
 ./secrets/probe-token-eu 600
 ./secrets/probe-token-us 600"
 actual="$(snapshot | cut -d ' ' -f 1,2)"
@@ -72,6 +73,10 @@ for file in "${tokens[@]}"; do
 done
 distinct="$(cat "${tokens[@]}" | sort -u | wc -l | tr -d ' ')"
 [[ "$distinct" == 3 ]] || fail "the three tokens must differ"
+key=secrets/console-secret-key
+if [[ "$(wc -c <"$key" | tr -d " ")" != 65 ]] || ! grep -Eqx '[0-9a-f]{64}' "$key"; then
+  fail "$key: must hold 64 lowercase hex characters and one newline"
+fi
 
 before="$(snapshot)"
 if pulse init --setup demo --yes </dev/null >/dev/null 2>&1; then
