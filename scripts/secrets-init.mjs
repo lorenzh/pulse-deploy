@@ -9,12 +9,16 @@
 // characters) or creates one, and writes it to /out/api/admin-tokens.json; it needs /out/console.
 // Every output file is owned by 1000:1000 (the container user bun) with mode 0400 and is
 // written through a temp file and a rename. No message ever holds a token.
+// Console key: when /out/console exists, files mode copies /in/console-secret-key (64 lowercase hex
+// characters, not equal to any token) to /out/console/secret-key; generate mode keeps a valid
+// /out/console/secret-key, creates a missing one and refuses an invalid one without replacing it.
 import { chmodSync, chownSync, closeSync, lstatSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const OWNER = 1000;
 const TOKEN_PATTERN = /^[\x21-\x7e]{16,}$/;
 const PLACEHOLDER_PREFIX = "replace-with-";
+const SECRET_KEY_PATTERN = /^[0-9a-f]{64}$/;
 const LOCATION_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 class SecretsError extends Error {
@@ -34,7 +38,8 @@ function tokenProblem(raw) {
   return { token, rule: undefined };
 }
 
-function readHostToken(file) {
+/** Checks a host input file (present, regular, no group or other access) and returns its content. */
+function readHostFile(file) {
   let stat;
   try {
     stat = lstatSync(file);
@@ -47,10 +52,22 @@ function readHostToken(file) {
   if ((mode & 0o077) !== 0) {
     fail(file, `mode 0${mode.toString(8).padStart(3, "0")} allows group or other access; run chmod 600`);
   }
-  const { token, rule } = tokenProblem(readFileSync(file, "utf8"));
+  return readFileSync(file, "utf8");
+}
+
+function readHostToken(file) {
+  const { token, rule } = tokenProblem(readHostFile(file));
   if (rule !== undefined) fail(file, rule);
   return token;
 }
+
+/** The strict console key rule: after one trailing newline is dropped, 64 lowercase hex characters. */
+function secretKeyOf(raw) {
+  const key = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
+  return SECRET_KEY_PATTERN.test(key) ? key : undefined;
+}
+
+const SECRET_KEY_RULE = "must hold 64 lowercase hex characters";
 
 /** Writes the content through a temp file in the same directory and renames it over the target. */
 function writeSecret(file, content) {
@@ -108,11 +125,20 @@ function filesMode(env) {
       writes.push([`/out/probe-${location}/probe-token`, token]);
     }
   }
+  const tokens = entries.map((e) => e.token);
   if (admin) {
     const token = readHostToken("/in/admin-token");
+    tokens.push(token);
     if (entries.some((e) => e.token === token)) fail("/in/admin-token", "must differ from every probe token");
     writes.push(["/out/api/admin-tokens.json", adminJson(token)]);
     if (isDirectory("/out/console")) writes.push(["/out/console/admin-token", token]);
+  }
+  if (isDirectory("/out/console")) {
+    const file = "/in/console-secret-key";
+    const key = secretKeyOf(readHostFile(file));
+    if (key === undefined) fail(file, SECRET_KEY_RULE);
+    if (tokens.includes(key)) fail(file, "must differ from every token");
+    writes.push(["/out/console/secret-key", key]);
   }
   writeSecret("/out/api/tokens.json", tokensJson(entries));
   for (const [file, content] of writes) writeSecret(file, content);
@@ -161,6 +187,22 @@ function generateMode(env) {
     writeSecret("/out/api/admin-tokens.json", adminJson(token));
     writeSecret(file, token);
   }
+  if (isDirectory("/out/console")) consoleKey();
+}
+
+/** Keeps a valid /out/console/secret-key, creates a missing one, refuses an invalid one unchanged. */
+function consoleKey() {
+  const file = "/out/console/secret-key";
+  let stat;
+  try {
+    stat = lstatSync(file);
+  } catch (err) {
+    if (err?.code !== "ENOENT") throw err;
+    writeSecret(file, randomToken());
+    return;
+  }
+  // A new key would make the stored seeds unreadable, so an invalid key is never replaced.
+  if (!stat.isFile() || secretKeyOf(readFileSync(file, "utf8")) === undefined) fail(file, SECRET_KEY_RULE);
 }
 
 try {

@@ -90,6 +90,7 @@ services:
     image: pulse-console:dev
     environment:
       PULSE_CONSOLE_ADMIN_TOKEN_FILE: /run/pulse/admin-token
+      PULSE_CONSOLE_SECRET_KEY_FILE: /run/pulse/secret-key
       # The public origin behind a TLS reverse proxy; empty means loopback mode.
       PULSE_CONSOLE_PUBLIC_URL: ${PULSE_CONSOLE_PUBLIC_URL:-}
     volumes:

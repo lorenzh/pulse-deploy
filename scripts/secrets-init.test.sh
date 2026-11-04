@@ -248,9 +248,14 @@ expect_multi_refused "a 0644 location file" "$wide" \
 
 # Admin token, without and with /out/console.
 admin=$(multi_input admin "probe-token-eu=$eu_token" "admin-token=$admin_token")
+# With /out/console, files mode also needs the console key.
+key=c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00
+withkey=$(multi_input withkey "probe-token-eu=$eu_token" "admin-token=$admin_token" "console-secret-key=$key")
 for console in "" 1; do
   new_volume out
-  msg=$(run_init "$admin" "$out" PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=on ${console:+MAKE_CONSOLE=1} 2>&1) || fail "admin (console=${console:-no}): secrets-init refused the input"
+  in_dir=$admin
+  [[ -z "$console" ]] || in_dir=$withkey
+  msg=$(run_init "$in_dir" "$out" PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=on ${console:+MAKE_CONSOLE=1} 2>&1) || fail "admin (console=${console:-no}): secrets-init refused the input"
   out_cmd "$out" 'cat /out/api/admin-tokens.json' |
     jq -e --arg a "$admin_token" '. == {"tokens": [{"name": "admin", "token": $a}]}' >/dev/null ||
     fail "admin (console=${console:-no}): admin-tokens.json is wrong"
@@ -278,6 +283,69 @@ expect_multi_refused "empty PULSE_SECRETS_ADMIN" "$admin" "PULSE_SECRETS_ADMIN: 
 expect_multi_refused "a location with a quote" \
   "$(multi_input quote "probe-token-a=$eu_token")" "PULSE_PROBE_LOCATIONS: each location must match" \
   'PULSE_PROBE_LOCATIONS=a,x"y'
+
+# Console key, files mode: /out/console gets secret-key equal to the host key without its newline.
+new_volume out
+msg=$(run_init "$withkey" "$out" PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=on MAKE_CONSOLE=1 2>&1) ||
+  fail "console key: secrets-init refused the input"
+[[ "$(out_cmd "$out" 'od -An -tx1 /out/console/secret-key | tr -d " \n"')" == "$(printf '%s' "$key" | od -An -tx1 | tr -d ' \n')" ]] ||
+  fail "console key: secret-key differs from the host key without its newline"
+[[ "$(out_cmd "$out" 'stat -c "%u:%g %a" /out/console/secret-key')" == "1000:1000 400" ]] ||
+  fail "console key: secret-key is not 1000:1000 400"
+grep -qF -- "$key" <<<"$msg" && fail "console key: the output shows the key"
+n=$((n + 1))
+echo "ok: files mode copies console-secret-key to /out/console/secret-key 1000:1000 0400"
+
+# Without /out/console no key is read: the admin input above has no console-secret-key.
+new_volume out
+run_init "$admin" "$out" PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=on >/dev/null 2>&1 ||
+  fail "no console: secrets-init needed a console key"
+n=$((n + 1))
+echo "ok: files mode without /out/console needs no console key"
+
+# Refused console keys: exit 1, the literal one-line error, no file written.
+key_refused() { # key_refused <name> <key content|-> <literal error>
+  local dir out err code=0
+  dir=$(multi_input "key-$1" "probe-token-eu=$eu_token" "admin-token=$admin_token")
+  [[ "$2" == "-" ]] || { printf '%s\n' "$2" >"$dir/console-secret-key"; chmod 600 "$dir/console-secret-key"; }
+  new_volume out
+  err=$(run_init "$dir" "$out" PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_ADMIN=on MAKE_CONSOLE=1 2>&1 >/dev/null) || code=$?
+  ((code == 1)) || fail "key $1: expected exit 1, got ${code}"
+  [[ "$err" == "$3" ]] || fail "key $1: unexpected error: ${err}"
+  [[ -z "$(out_cmd "$out" 'find /out -type f')" ]] || fail "key $1: a refused key wrote a file"
+  n=$((n + 1))
+  printf 'ok: console key %s refused: %s\n' "$1" "$err"
+}
+key_refused missing - "secrets-init: /in/console-secret-key: is missing; run scripts/init-secrets.sh"
+key_refused upper "${key^^}" "secrets-init: /in/console-secret-key: must hold 64 lowercase hex characters"
+key_refused admin "$admin_token" "secrets-init: /in/console-secret-key: must differ from every token"
+key_refused probe "$eu_token" "secrets-init: /in/console-secret-key: must differ from every token"
+
+# Console key, generate mode: created, kept on a rerun, an invalid one refused and not replaced.
+new_volume out
+run_init - "$out" PULSE_SECRETS_MODE=generate PULSE_SECRETS_ADMIN=on MAKE_CONSOLE=1 >/dev/null 2>&1 ||
+  fail "generate key: secrets-init failed"
+out_cmd "$out" 'grep -qxE "[0-9a-f]{64}" /out/console/secret-key && [ "$(wc -c </out/console/secret-key)" = 64 ]' ||
+  fail "generate key: secret-key is not 64 lowercase hex characters"
+[[ "$(out_cmd "$out" 'stat -c "%u:%g %a" /out/console/secret-key')" == "1000:1000 400" ]] ||
+  fail "generate key: secret-key is not 1000:1000 400"
+key_hash=$(out_cmd "$out" 'sha256sum </out/console/secret-key')
+run_init - "$out" PULSE_SECRETS_MODE=generate PULSE_SECRETS_ADMIN=on MAKE_CONSOLE=1 >/dev/null 2>&1 ||
+  fail "generate key: the rerun failed"
+[[ "$(out_cmd "$out" 'sha256sum </out/console/secret-key')" == "$key_hash" ]] || fail "generate key: a rerun changed the key"
+n=$((n + 1))
+echo "ok: generate mode creates the console key and keeps it on a rerun"
+new_volume out
+docker run --pull never --rm --network none --user 0:0 -v "$out:/out" --entrypoint sh "$image" -c \
+  'mkdir -p /out/console && printf "%s\n" not-a-key >/out/console/secret-key'
+code=0
+msg=$(run_init - "$out" PULSE_SECRETS_MODE=generate PULSE_SECRETS_ADMIN=on MAKE_CONSOLE=1 2>&1) || code=$?
+((code == 1)) || fail "generate invalid key: exit ${code}, expected 1"
+[[ "$msg" == "secrets-init: /out/console/secret-key: must hold 64 lowercase hex characters" ]] ||
+  fail "generate invalid key: unexpected message: ${msg}"
+[[ "$(out_cmd "$out" 'cat /out/console/secret-key')" == "not-a-key" ]] || fail "generate invalid key: the key was replaced"
+n=$((n + 1))
+echo "ok: generate mode refuses an invalid console key and keeps it"
 
 # Every volume made by a case is tracked here, so cleanup removes it (none leaks).
 ((${#volumes[@]} == n)) || fail "cleanup tracks ${#volumes[@]} volumes, expected ${n}"

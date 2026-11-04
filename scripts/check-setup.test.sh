@@ -125,6 +125,10 @@ expect_fail "init-secrets.sh with a short admin token" 7 \
   "sed -i 's/^make_token admin-token\$/make_token admin-token; head -c 32 \"\$dir\/probe-token\" >\"\$dir\/admin-token\"/' scripts/init-secrets.sh"
 expect_fail "init-secrets.sh that rewrites the admin token" 7 \
   "sed -i 's/^make_token admin-token\$/rm -f \"\$dir\/admin-token\"; make_token admin-token/' scripts/init-secrets.sh"
+expect_fail "init-secrets.sh without a console key" 7 \
+  "sed -i '/^make_token console-secret-key\$/d' scripts/init-secrets.sh"
+expect_fail "init-secrets.sh that rewrites the console key" 7 \
+  "sed -i 's/^make_token console-secret-key\$/rm -f \"\$dir\/console-secret-key\"; make_token console-secret-key/' scripts/init-secrets.sh"
 expect_pass "a local, gitignored override in full" \
   "printf 'services: {}\\n' >full/compose.override.yaml"
 expect_pass "a valid bump that changes only common/services.yaml" \

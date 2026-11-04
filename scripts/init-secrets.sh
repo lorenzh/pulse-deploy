@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# init-secrets.sh [--dir <dir>]: create the host secrets directory (mode 0700) and two random
-# tokens, each mode 0600: the probe token <dir>/probe-token and the console admin token
-# <dir>/admin-token. Each is created on its own; an existing token is never overwritten.
+# init-secrets.sh [--dir <dir>]: create the host secrets directory (mode 0700) and three random
+# values, each mode 0600: the probe token <dir>/probe-token and the console admin token
+# <dir>/admin-token, and the console encryption key <dir>/console-secret-key. Each is created on its own; an existing token is never overwritten.
 # Default directory: secrets/ at the repository root. Prints the path, never the value.
 set -euo pipefail
 
@@ -51,3 +51,5 @@ make_token() {
 
 make_token probe-token
 make_token admin-token
+# The console encryption key: same format (64 lowercase hex characters and a newline).
+make_token console-secret-key
