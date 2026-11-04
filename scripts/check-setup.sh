@@ -155,11 +155,20 @@ grep -qxE '[0-9a-f]{64}' "$tmp/s/probe-token" || fail "rule 7: probe-token is no
 [[ -f "$tmp/s/admin-token" ]] || fail "rule 7: admin-token is missing"
 [[ "$(stat -c %a "$tmp/s/admin-token")" == "600" ]] || fail "rule 7: admin-token is not mode 600"
 grep -qxE '[0-9a-f]{64}' "$tmp/s/admin-token" || fail "rule 7: admin-token is not 64 hex characters"
+[[ -f "$tmp/s/console-secret-key" ]] || fail "rule 7: console-secret-key is missing"
+[[ "$(stat -c %a "$tmp/s/console-secret-key")" == "600" ]] || fail "rule 7: console-secret-key is not mode 600"
+# 65 bytes and one full line of 64 hex characters: the last byte is the newline.
+if [[ "$(wc -c <"$tmp/s/console-secret-key")" != "65" ]] ||
+  ! grep -qxE '[0-9a-f]{64}' "$tmp/s/console-secret-key"; then
+  fail "rule 7: console-secret-key is not 64 hex characters and a newline"
+fi
 before=$(sha256sum <"$tmp/s/probe-token")
+before_key=$(sha256sum <"$tmp/s/console-secret-key")
 before_admin=$(sha256sum <"$tmp/s/admin-token")
 "$script_dir/init-secrets.sh" --dir "$tmp/s" >/dev/null
 [[ "$(sha256sum <"$tmp/s/probe-token")" == "$before" ]] || fail "rule 7: a second run changed probe-token"
 [[ "$(sha256sum <"$tmp/s/admin-token")" == "$before_admin" ]] || fail "rule 7: a second run changed admin-token"
-ok "rule 7: init-secrets.sh writes 700/600 probe and admin tokens and keeps existing tokens"
+[[ "$(sha256sum <"$tmp/s/console-secret-key")" == "$before_key" ]] || fail "rule 7: a second run changed console-secret-key"
+ok "rule 7: init-secrets.sh writes 700/600 probe and admin tokens and the console key and keeps them"
 
 echo "check-setup: all rules passed"

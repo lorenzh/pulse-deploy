@@ -192,6 +192,18 @@ describe("renderCompose", () => {
     expect(svc(doc, "console").environment?.PULSE_CONSOLE_PUBLIC_URL).toBe(
       "${PULSE_CONSOLE_PUBLIC_URL:-}",
     );
+    expect(svc(doc, "console").environment?.PULSE_CONSOLE_SECRET_KEY_FILE).toBe(
+      "/run/pulse/secret-key",
+    );
+  });
+
+  test("a render without the console names no secret key", () => {
+    for (const args of [
+      ["--setup", "minimal"],
+      ["--setup", "full", "--no-console"],
+    ]) {
+      expect(JSON.stringify(render(...args))).not.toContain("SECRET_KEY");
+    }
   });
 
   test("console-data is declared and labeled only with the console", () => {

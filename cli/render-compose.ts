@@ -214,6 +214,7 @@ function optional(common: Common, answers: Model): YamlMap {
       ...base,
       environment: env(base, {
         PULSE_CONSOLE_ADMIN_TOKEN_FILE: "/run/pulse/admin-token",
+        PULSE_CONSOLE_SECRET_KEY_FILE: "/run/pulse/secret-key",
         PULSE_CONSOLE_PUBLIC_URL: new Ref(`\${PULSE_CONSOLE_PUBLIC_URL:-}`),
       }),
       volumes: ["console-secrets:/run/pulse:ro", "console-data:/data"],

@@ -35,7 +35,7 @@ The `pulse` CLI can write a dev install in its own directory: `pulse init --setu
 
 
 ```sh
-scripts/init-secrets.sh                            # once: secrets/probe-token and secrets/admin-token, mode 0600
+scripts/init-secrets.sh                            # once: secrets/probe-token, admin-token and console-secret-key, mode 0600
 docker compose -f dev/compose.yaml up -d --build   # rebuild after a change in a checkout
 scripts/wait-ready.sh dev/compose.yaml 900
 docker compose -f dev/compose.yaml down            # stop; the volumes stay
@@ -52,9 +52,11 @@ The console keeps its local accounts and sessions in the volume `console-data` (
 - TLS reverse proxy: set `PULSE_CONSOLE_PUBLIC_URL` to the public origin (for example `https://console.example.com`) in `dev/.env`. Empty means loopback mode on `http://127.0.0.1:${PULSE_CONSOLE_PORT}`.
 - Reset the console (destructive: deletes every console account and session): `docker compose -f dev/compose.yaml stop console`, `docker compose -f dev/compose.yaml rm -f console`, `docker volume rm pulse-dev_console-data`, then `up -d`. A new setup code appears.
 
-An existing dev install: run `scripts/init-secrets.sh` once more; it keeps `probe-token` and adds `admin-token`.
+An existing dev install: run `scripts/init-secrets.sh` once more; it keeps the existing files and adds `admin-token` and `console-secret-key`.
 
-Test the flow: with fresh volumes, after `scripts/wait-ready.sh dev/compose.yaml 900`, run `bash e2e/console-setup.sh dev/compose.yaml`. It does the setup itself, so it fails when an owner already exists. See [README.md](../README.md#end-to-end-test).
+The console encrypts the owner's authenticator secrets with `secrets/console-secret-key`: 64 lowercase hex characters (32 random bytes) and one newline, mode `0600`. It must differ from every token. Back it up together with the `console-data` volume; one without the other cannot sign in with an authenticator. A new or lost key makes the stored authenticators unreadable: the owner then signs in with the password and a recovery code and replaces the authenticator, which uses the new key. Never replace a working key. `secrets-init` copies it to `/run/pulse/secret-key` (`PULSE_CONSOLE_SECRET_KEY_FILE`). A console `main` without two-factor sign-in ignores it.
+
+Test the flow: with fresh volumes, after `scripts/wait-ready.sh dev/compose.yaml 900`, run `bash e2e/console-setup.sh dev/compose.yaml`. It does the setup itself, so it fails when an owner already exists. It runs the `legacy` or the `two-factor` flow, as the console answers; `E2E_CONSOLE_FLOW=legacy|two-factor` forces one. See [README.md](../README.md#end-to-end-test).
 
 ## Variables
 
@@ -63,7 +65,7 @@ Copy `.env.example` to `dev/.env` and uncomment a line to change it.
 | Variable             | Default      | Meaning                                                                       |
 | -------------------- | ------------ | ----------------------------------------------------------------------------- |
 | `PULSE_SRC_DIR`      | `../..`      | Directory that holds the `pulse-<svc>` checkouts, relative to `dev/`.         |
-| `PULSE_SECRETS_DIR`  | `../secrets` | Host directory with `probe-token` and `admin-token`, relative to `dev/`. Never created. |
+| `PULSE_SECRETS_DIR`  | `../secrets` | Host directory with `probe-token`, `admin-token` and `console-secret-key`, relative to `dev/`. Never created. |
 | `PULSE_LOCATION`     | `default`    | Location of the probe and of its token in the api's `tokens.json`.            |
 | `PULSE_API_PORT`     | `3000`       | Host port of the api, on `127.0.0.1`.                                         |
 | `PULSE_STATUS_PORT`  | `8080`       | Host port of the status page, on all interfaces.                              |

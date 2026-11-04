@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   cryptoRandom,
   generateInstallId,
+  generateSecretKey,
   generateTokens,
+  isSecretKeyContent,
   type RandomSource,
   tokenContentValid,
 } from "./tokens.ts";
@@ -61,5 +63,32 @@ describe("tokens", () => {
     expect(tokenContentValid("a".repeat(15))).toBe(false);
     expect(tokenContentValid("replace-with-x-and-more-text")).toBe(false);
     expect(tokenContentValid("has a space in it ok")).toBe(false);
+  });
+});
+
+describe("console secret key", () => {
+  test("a key is 64 lowercase hex characters from 32 bytes", () => {
+    const sizes: number[] = [];
+    const bytes = Uint8Array.from({ length: 32 }, (_, i) => 255 - i);
+    expect(generateSecretKey(scripted([bytes], sizes))).toBe(
+      "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e0",
+    );
+    expect(sizes).toEqual([32]);
+  });
+
+  test.each([
+    ["a".repeat(64), true],
+    [`${"a".repeat(64)}\n`, true],
+    [`${"0123456789abcdef".repeat(4)}\n`, true],
+    [`${"a".repeat(64)}\n\n`, false],
+    ["A".repeat(64), false],
+    ["a".repeat(63), false],
+    ["a".repeat(65), false],
+    [`${"g".repeat(64)}`, false],
+    [` ${"a".repeat(64)}`, false],
+    [`${"a".repeat(64)}\r\n`, false],
+    ["", false],
+  ])("isSecretKeyContent(%j) is %p", (raw, valid) => {
+    expect(isSecretKeyContent(raw)).toBe(valid);
   });
 });

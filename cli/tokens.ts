@@ -41,3 +41,17 @@ export function tokenContentValid(raw: string): boolean {
   const token = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
   return /^[\x21-\x7e]{16,}$/.test(token) && !token.startsWith("replace-with-");
 }
+
+/** The host file of the console secret key. */
+export const SECRET_KEY_PATH = "secrets/console-secret-key";
+
+/** A new console secret key: 32 bytes as 64 lowercase hex. */
+export function generateSecretKey(random: RandomSource): string {
+  return randomHex(random, 32);
+}
+
+/** The strict secrets-init rule for the console key file: 64 lowercase hex, one optional newline. */
+export function isSecretKeyContent(raw: string): boolean {
+  const key = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
+  return TOKEN_PATTERN.test(key);
+}

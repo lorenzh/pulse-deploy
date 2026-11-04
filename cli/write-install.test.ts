@@ -139,6 +139,7 @@ const DEMO_FILES = [
   "pulse.json 644",
   "secrets/ 700",
   "secrets/admin-token 600",
+  "secrets/console-secret-key 600",
   "secrets/probe-token-eu 600",
   "secrets/probe-token-us 600",
 ];
@@ -189,6 +190,7 @@ describe("conflicts", () => {
         "secrets/admin-token",
         "secrets/probe-token-eu",
         "secrets/probe-token-us",
+        "secrets/console-secret-key",
       ]
         .map((p) => `pulse init: ${p}: exists\n`)
         .join("") + "pulse init: pass --force to back up and replace them\n",
@@ -436,6 +438,74 @@ describe("signals during the write", () => {
       expect(process.listenerCount(name)).toBe(0);
     },
   );
+});
+
+describe("console secret key", () => {
+  const KEY = "secrets/console-secret-key";
+  const INVALID =
+    "pulse init: secrets/console-secret-key: is not a valid key (64 lowercase hex characters); fix or remove it\n";
+
+  test("is written as 64 lowercase hex and a newline, mode 0600, only with the console", async () => {
+    const on = tempDir();
+    const r = await init(on, ["--setup", "full"]);
+    expect(r.code).toBe(0);
+    const key = readFileSync(join(on, KEY), "utf8");
+    expect(key).toMatch(/^[0-9a-f]{64}\n$/);
+    expect(mode(join(on, KEY))).toBe("600");
+    expect(r.out).toContain(`wrote ${KEY}\n`);
+    expect(r.out + r.err).not.toContain(key.trim());
+    const off = tempDir();
+    expect((await init(off, ["--setup", "full", "--no-console"])).code).toBe(0);
+    expect(existsSync(join(off, KEY))).toBe(false);
+    const minimal = tempDir();
+    expect((await init(minimal, ["--setup", "minimal"])).code).toBe(0);
+    expect(existsSync(join(minimal, KEY))).toBe(false);
+  });
+
+  test("--force keeps a valid key byte-equal, also one without a newline", async () => {
+    const d = tempDir();
+    expect((await init(d, ["--setup", "full"])).code).toBe(0);
+    const before = readFileSync(join(d, KEY));
+    const r = await init(d, ["--setup", "full", "--force"], { random: seeded("other") });
+    expect(r.code).toBe(0);
+    expect(readFileSync(join(d, KEY))).toEqual(before);
+    expect(r.out).toContain(`kept ${KEY}\n`);
+    writeFileSync(join(d, KEY), "0123456789abcdef".repeat(4));
+    expect((await init(d, ["--setup", "full", "--force"], { random: seeded("third") })).code).toBe(
+      0,
+    );
+    expect(readFileSync(join(d, KEY), "utf8")).toBe("0123456789abcdef".repeat(4));
+  });
+
+  test.each([
+    ["upper case", `${"A".repeat(64)}\n`],
+    ["too short", `${"a".repeat(63)}\n`],
+    ["a placeholder", "replace-with-key\n"],
+    ["empty", ""],
+  ])("--force refuses an invalid key (%s) before any write", async (_, content) => {
+    const d = tempDir();
+    expect((await init(d, ["--setup", "full"])).code).toBe(0);
+    writeFileSync(join(d, KEY), content);
+    writeFileSync(join(d, "config/api/checks.json"), "{}\n");
+    const before = snapshot(d);
+    const r = await init(d, ["--setup", "full", "--force"], { random: seeded("other") });
+    expect(r.code).toBe(1);
+    expect(r.err).toBe(INVALID);
+    expect(r.out).toBe("");
+    expect(snapshot(d)).toEqual(before);
+    expect(existsSync(join(d, ".pulse-backup"))).toBe(false);
+    expect(existsSync(join(d, ".pulse-init.lock"))).toBe(false);
+  });
+
+  test("an invalid key is not refused when the console is off", async () => {
+    const d = tempDir();
+    expect((await init(d, ["--setup", "full"])).code).toBe(0);
+    writeFileSync(join(d, KEY), "bad\n");
+    const r = await init(d, ["--setup", "full", "--no-console", "--force"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(`no longer used: ${KEY}\n`);
+    expect(readFileSync(join(d, KEY), "utf8")).toBe("bad\n");
+  });
 });
 
 describe("installId", () => {

@@ -12,7 +12,7 @@ Open the status page on http://127.0.0.1:8080, the console on http://127.0.0.1:8
 
 | Service        | Image                          | Port                                            | Role                                                                                           |
 | -------------- | ------------------------------ | ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `secrets-init` | `oven/bun`                     | none, no network                                | Generates one random 64-hex token per location (`eu`, `us`) and the console admin token; keeps them on a rerun. |
+| `secrets-init` | `oven/bun`                     | none, no network                                | Generates one random 64-hex token per location (`eu`, `us`) the console admin token and the console secret key; keeps them on a rerun. |
 | `demo-init`    | `oven/bun`                     | none, no network                                | Writes the checks (`init.mjs`) to the volume `demo-config`, with maintenance windows relative to the start. |
 | `demo-targets` | `oven/bun`                     | none                                            | HTTP targets driven by the time since its start (`targets.mjs`).                              |
 | `demo-tls`     | `alpine/openssl`               | none                                            | HTTPS on 8443 with a self-signed certificate valid for 5 days (`tls.sh`).                     |
@@ -71,7 +71,9 @@ The console keeps its local accounts and sessions in the volume `console-data` (
 - TLS reverse proxy: set `PULSE_CONSOLE_PUBLIC_URL` to the public origin (for example `https://console.example.com`) in `demo/.env`. Empty means loopback mode on `http://127.0.0.1:${PULSE_CONSOLE_PORT}`.
 - Reset the console (destructive: deletes every console account and session): `docker compose -f demo/compose.yaml stop console`, `docker compose -f demo/compose.yaml rm -f console`, `docker volume rm pulse-demo_console-data`, then `up -d`. A new setup code appears.
 
-The pinned console `0.1.0` has no setup flow; `demo` gets it with the next console pin bump.
+The demo has no host key: `secrets-init` generates `secret-key` (64 lowercase hex characters) in `console-secrets` and the console reads it through `PULSE_CONSOLE_SECRET_KEY_FILE`. A rerun keeps it; an invalid one is refused, never replaced, because a new key makes the stored authenticators unreadable. `docker compose -f demo/compose.yaml down -v` deletes it with the accounts.
+
+The pinned console `0.1.0` has no setup flow and ignores the key; `demo` gets the setup flow and two-factor sign-in with the next console pin bump.
 
 ## Variables
 

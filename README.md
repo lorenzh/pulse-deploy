@@ -59,18 +59,25 @@ The install directory works with plain `docker compose` too. Install, the prompt
 
 No setup holds a token, password or secret. The probe token and the console admin token live in host files:
 
-1. `scripts/init-secrets.sh [--dir <dir>]` creates `secrets/` (mode `0700`) and writes `secrets/probe-token` and `secrets/admin-token`: each 32 random bytes as 64 hex characters, mode `0600`. Each file is created on its own; an existing file is never overwritten. It prints the paths, never a value. `secrets/` is in `.gitignore`. An existing `full` or `dev` install: run it once more to add `admin-token`.
+1. `scripts/init-secrets.sh [--dir <dir>]` creates `secrets/` (mode `0700`) and writes `secrets/probe-token`, `secrets/admin-token` and `secrets/console-secret-key`: each 32 random bytes as 64 lowercase hex characters and a newline, mode `0600`. Each file is created on its own; an existing file is never overwritten. It prints the paths, never a value. `secrets/` is in `.gitignore`. An existing `full` or `dev` install: run it once more to add `admin-token` and `console-secret-key`; `secrets-init` refuses to start without them.
 2. At each start the one-shot service `secrets-init` reads `secrets/probe-token` through a read-only bind mount and copies it into per-consumer named volumes, owned by the container user `bun` (uid 1000) with mode `0400`:
    - `api-secrets`, mounted read-only at `/run/pulse` in the api: `tokens.json` = `{"tokens":[{"location":<PULSE_LOCATION>,"token":<token>}]}`;
    - `probe-secrets`, mounted read-only at `/run/pulse` in the probe: `probe-token`;
-   - in `full`, `dev` and `demo` (`PULSE_SECRETS_ADMIN=on`): `admin-tokens.json` = `{"tokens":[{"name":"admin","token":<admin token>}]}` in `api-secrets`, and `admin-token` in `console-secrets`, mounted read-only at `/run/pulse` in the console.
+   - in `full`, `dev` and `demo` (`PULSE_SECRETS_ADMIN=on`): `admin-tokens.json` = `{"tokens":[{"name":"admin","token":<admin token>}]}` in `api-secrets`, and `admin-token` and `secret-key` (from `secrets/console-secret-key`, without its newline) in `console-secrets`, mounted read-only at `/run/pulse` in the console. The console reads the key through `PULSE_CONSOLE_SECRET_KEY_FILE=/run/pulse/secret-key`.
 3. api, probe and console start only after `secrets-init` has exited with code 0.
 
 `secrets-init` refuses, with one line on stderr that names the file and the rule (never the content):
 
 - a `probe-token` that is a symlink or not a regular file;
 - a mode with any group or other bit (`0644`, `0640`): run `chmod 600`;
-- an empty token, a token shorter than 16 characters, with spaces or other non-printable characters, or the placeholder `replace-with-…`.
+- an empty token, a token shorter than 16 characters, with spaces or other non-printable characters, or the placeholder `replace-with-…`;
+- with the console: a missing `console-secret-key` (`is missing; run scripts/init-secrets.sh`), one that is not exactly 64 lowercase hex characters after one trailing newline, or one equal to a token (`must differ from every token`).
+
+### Console secret key
+
+The console encrypts the owner's authenticator secrets with `secrets/console-secret-key`: 64 lowercase hex characters (32 random bytes) and one newline, mode `0600`. It must differ from every token. Back it up together with the `console-data` volume; one without the other cannot sign in with an authenticator. A new or lost key makes the stored authenticators unreadable: the owner then signs in with the password and a recovery code and replaces the authenticator, which uses the new key. Never replace a working key. The demo generates its key inside `console-secrets`, keeps it on a rerun, and refuses an invalid one instead of replacing it.
+
+Rollout: this repository provisions the key first. Consoles without two-factor sign-in ignore it. `full`, `demo` and CLI installs get two-factor sign-in (TOTP and recovery codes) with the next console pin bump (`scripts/bump-images.sh` after a console release); `dev` gets them as soon as console `main` has them.
 
 A missing `secrets/` directory makes `up` fail with `bind source path does not exist`; Compose never creates it as root. `PULSE_SECRETS_DIR` (default `../secrets`, relative to the setup directory) points to another directory.
 
@@ -125,7 +132,16 @@ scripts/bump-images.sh --check-latest          # fails when a higher x.y.z relea
 
 `bash e2e/compose-e2e.sh` tests `full` on the published images, with the test-only overlay `e2e/compose.e2e.yaml` (api on loopback, an e2e target). It writes a throwaway admin token to `e2e/.secrets/admin-token` before `init-secrets.sh`, so the api and the console share it. It uses its own project `pulse-e2e` and its own throwaway secrets in `e2e/.secrets/`, and ends with `==> All checks passed`. It needs ports 3000, 8080 and 8082 free, curl and jq, and takes about 4 minutes. Timeouts can be raised with `E2E_TIMEOUT_*` variables (see the top of the script).
 
-`bash e2e/console-setup.sh dev/compose.yaml` tests the console first-run setup on a running `dev` stack with fresh volumes, after `scripts/wait-ready.sh`. It reads the setup code from the console log, creates the owner `e2e-owner@example.com` with a random password, tests the api connection and signs in. When a form carries a `form_token` field, every POST sends it back; without one the POSTs stay as before. Step 8b sends the successful sign-in POST again and expects `409 Already submitted`, or prints `ok: 8b replay check skipped: console without form_token` when the console has no form token. Then it recreates the console, and checks that the setup is closed and the account stays. Last, it scans the console database files for the admin token and expects no match. It prints only `ok:` lines, never a token, code or password. It needs curl and jq. The CI `dev` job runs it before teardown. A second run on the same volumes fails at step 1, because the console prints no new code once the owner exists. It needs a console with the setup flow, so it does not run against `full` until the console pin bump.
+`bash e2e/console-setup.sh dev/compose.yaml` tests the console first-run setup on a running `dev` stack with fresh volumes, after `scripts/wait-ready.sh`. It reads the setup code from the console log, creates the owner `e2e-owner@example.com` with a random password, tests the api connection, signs in, recreates the console, and checks that the setup is closed and the account stays. Last, it scans the console database files for the admin token and expects no match. It prints only `ok:` lines, never a token, code, password, setup key or recovery code. It needs curl, jq and node.
+
+The console answers Finish setup in one of two ways, and the script picks the flow from that `Location`. `E2E_CONSOLE_FLOW` sets it: `auto` (default), `legacy` or `two-factor`; another value exits 2 before any request. With a set flow that differs from the console's, step 6 fails.
+
+- `legacy` (`/sign-in?setup=done`, console #562): steps 7 to 10 as above.
+- `two-factor` (`/account/authenticator`): enrolment with a TOTP code from `node e2e/totp.mjs <base32 key>` and 10 recovery codes, a TOTP sign-in, a recovery code that works once, sign out all (other browsers end, this one stays), a console recreate with a TOTP sign-in that proves the key survived, and a database scan for the admin token, the secret key, the setup key and the recovery codes. Each browser has its own cookie jar.
+
+When a form carries a `form_token` field, every POST sends it back; without one the POSTs stay as before. In the legacy flow, step 8b sends the successful sign-in POST again and expects `409 Already submitted`, or prints `ok: 8b replay check skipped: console without form_token` when the console has no form token.
+
+The CI `dev` job runs `auto` before teardown. A second run on the same volumes fails at step 1, because the console prints no new code once the owner exists. It needs a console with the setup flow, so it does not run against `full` until the console pin bump.
 
 ## Checks
 
