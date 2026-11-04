@@ -325,6 +325,8 @@ key_refused probe "$eu_token" "secrets-init: /in/console-secret-key: must differ
 new_volume out
 run_init - "$out" PULSE_SECRETS_MODE=generate PULSE_SECRETS_ADMIN=on MAKE_CONSOLE=1 >/dev/null 2>&1 ||
   fail "generate key: secrets-init failed"
+# The command runs in the container, so $(...) must not expand here.
+# shellcheck disable=SC2016
 out_cmd "$out" 'grep -qxE "[0-9a-f]{64}" /out/console/secret-key && [ "$(wc -c </out/console/secret-key)" = 64 ]' ||
   fail "generate key: secret-key is not 64 lowercase hex characters"
 [[ "$(out_cmd "$out" 'stat -c "%u:%g %a" /out/console/secret-key')" == "1000:1000 400" ]] ||

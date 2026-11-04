@@ -158,8 +158,10 @@ grep -qxE '[0-9a-f]{64}' "$tmp/s/admin-token" || fail "rule 7: admin-token is no
 [[ -f "$tmp/s/console-secret-key" ]] || fail "rule 7: console-secret-key is missing"
 [[ "$(stat -c %a "$tmp/s/console-secret-key")" == "600" ]] || fail "rule 7: console-secret-key is not mode 600"
 # 65 bytes and one full line of 64 hex characters: the last byte is the newline.
-[[ "$(wc -c <"$tmp/s/console-secret-key")" == "65" ]] &&
-  grep -qxE '[0-9a-f]{64}' "$tmp/s/console-secret-key" || fail "rule 7: console-secret-key is not 64 hex characters and a newline"
+if [[ "$(wc -c <"$tmp/s/console-secret-key")" != "65" ]] ||
+  ! grep -qxE '[0-9a-f]{64}' "$tmp/s/console-secret-key"; then
+  fail "rule 7: console-secret-key is not 64 hex characters and a newline"
+fi
 before=$(sha256sum <"$tmp/s/probe-token")
 before_key=$(sha256sum <"$tmp/s/console-secret-key")
 before_admin=$(sha256sum <"$tmp/s/admin-token")

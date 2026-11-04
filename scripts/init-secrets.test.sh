@@ -30,7 +30,9 @@ cmp -s "$d/admin-token" "$d/probe-token" && fail "admin-token equals probe-token
 k="$d/console-secret-key"
 [[ -f "$k" && ! -L "$k" ]] || fail "console-secret-key is not a regular file"
 [[ "$(stat -c %a "$k")" == "600" ]] || fail "console-secret-key mode is not 600"
-[[ "$(wc -c <"$k")" == "65" ]] && grep -Eqx '[0-9a-f]{64}' "$k" || fail "console-secret-key is not 64 lowercase hex characters and a newline"
+if [[ "$(wc -c <"$k")" != "65" ]] || ! grep -Eqx '[0-9a-f]{64}' "$k"; then
+  fail "console-secret-key is not 64 lowercase hex characters and a newline"
+fi
 grep -qf "$k" "$work/out" && fail "the console key was printed"
 echo "ok: planted symlink ignored; probe-token, admin-token and console-secret-key written 600, 64 hex"
 
