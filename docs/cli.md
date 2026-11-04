@@ -190,7 +190,15 @@ A second `pulse init` in the same directory exits 1, lists the files that exist 
 
 ## What `down` keeps
 
-`pulse down` removes the containers and networks. It keeps the volumes (database, notify ledger, runtime secrets) and every file. `pulse down --volumes` also deletes the volumes. The files in the directory stay either way.
+`pulse down` removes the containers and networks. It keeps the volumes (database, notify ledger, console database, runtime secrets) and every file. `pulse down --volumes` also deletes the volumes. The files in the directory stay either way.
+
+## Console setup and accounts
+
+The console keeps its accounts and sessions in the volume `console-data` (mounted at `/data`). It survives `pulse down`. On a console without accounts, it logs a one-time setup code. Find it with `docker compose logs console | grep 'setup code'` in the install directory, then open the console URL and create the first account.
+
+`.env` holds `PULSE_CONSOLE_PUBLIC_URL`, from `--console-url`. The default `http://127.0.0.1:<port>` is loopback mode. Behind TLS, set it to the public `https://` origin.
+
+`pulse down --volumes` deletes `console-data`: every account and session is gone, and the next start asks for a new setup code. The pinned console `0.1.0` ignores the volume and the URL; the setup flow arrives with the next console pin bump in a CLI release.
 
 ## Demo maintenance windows
 

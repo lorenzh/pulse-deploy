@@ -45,6 +45,7 @@ function envEntries(answers: Answers): [string, string][] {
   if (ports.status !== undefined) out.push(["PULSE_STATUS_PORT", String(ports.status)]);
   if (urls.status !== undefined) out.push(["PULSE_STATUS_PUBLIC_URL", urls.status]);
   if (ports.console !== undefined) out.push(["PULSE_CONSOLE_PORT", String(ports.console)]);
+  if (urls.console !== undefined) out.push(["PULSE_CONSOLE_PUBLIC_URL", urls.console]);
   if (ports.mailpit !== undefined) out.push(["PULSE_MAILPIT_PORT", String(ports.mailpit)]);
   if (answers.srcDir !== undefined) out.push(["PULSE_SRC_DIR", answers.srcDir]);
   return out;

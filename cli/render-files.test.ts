@@ -127,9 +127,16 @@ describe("renderFiles", () => {
         "PULSE_STATUS_PORT='8080'",
         "PULSE_STATUS_PUBLIC_URL='http://localhost:8080'",
         "PULSE_CONSOLE_PORT='8082'",
+        "PULSE_CONSOLE_PUBLIC_URL='http://127.0.0.1:8082'",
         "PULSE_SRC_DIR='/src/pulse'",
         "",
       ].join("\n"),
+    );
+    expect(
+      content(files("--setup", "full", "--console-url", "https://console.example.com"), ".env"),
+    ).toContain("PULSE_CONSOLE_PUBLIC_URL='https://console.example.com'\n");
+    expect(content(files("--setup", "full", "--no-console"), ".env")).not.toContain(
+      "PULSE_CONSOLE",
     );
     expect(renderEnv([["A", "x $y"]])).toContain("A='x $y'\n");
     for (const bad of ["it's", "a\nb", "a\0b", "a\rb"]) {
