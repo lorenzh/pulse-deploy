@@ -11,6 +11,7 @@ import {
   parseCheck,
   resolveAnswers,
   type Setup,
+  validateConsoleUrl,
   validateEnvName,
   validateLocation,
   validatePublicUrl,
@@ -465,7 +466,10 @@ async function askPorts(p: Prompter, err: Err, f: InitFlags, setup: Setup): Prom
       err,
       `${svc.svc} public URL`,
       `http://${url.host}:${f[svc.key]}`,
-      (raw) => validatePublicUrl(url.flag, raw),
+      (raw) =>
+        url.key === "consoleUrl"
+          ? validateConsoleUrl(url.flag, raw)
+          : validatePublicUrl(url.flag, raw),
     );
   }
 }
