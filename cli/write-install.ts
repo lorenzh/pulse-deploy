@@ -17,7 +17,13 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { DIRECTORIES, type FileEntry, type FileMap } from "./render-files.ts";
-import { type RandomSource, randomHex, tokenContentValid } from "./tokens.ts";
+import {
+  isSecretKeyContent,
+  type RandomSource,
+  randomHex,
+  SECRET_KEY_PATH,
+  tokenContentValid,
+} from "./tokens.ts";
 
 export const LOCK_NAME = ".pulse-init.lock";
 export const BACKUP_DIR = ".pulse-backup";
@@ -34,7 +40,11 @@ export const KNOWN_FILES = [
   "helpers/demo-targets.mjs",
   "helpers/demo-tls.sh",
   "secrets/admin-token",
+  SECRET_KEY_PATH,
 ];
+
+export const INVALID_KEY_RULE =
+  "is not a valid key (64 lowercase hex characters); fix or remove it";
 const PROBE_TOKEN = /^probe-token-[a-z0-9][a-z0-9-]{0,31}$/;
 
 /** Records SIGINT and SIGTERM; the returned function unsubscribes. */
@@ -73,6 +83,8 @@ export interface WriteRequest {
   files: FileMap;
   /** Paths of `files` that hold a token: a valid existing one is kept with --force. */
   tokenPaths: ReadonlySet<string>;
+  /** Paths of `files` that hold a secret key: a valid one is kept, an invalid one refused. */
+  keyPaths?: ReadonlySet<string>;
   force: boolean;
   random: RandomSource;
   now: Date;
@@ -115,7 +127,12 @@ function unusedManaged(dir: string, files: FileMap): string[] {
  * directories, a secrets/ wider than 0700, and, without --force, any existing managed file.
  * Returns the error lines; empty means the preflight passed.
  */
-export function preflight(dir: string, files: FileMap, force: boolean): string[] {
+export function preflight(
+  dir: string,
+  files: FileMap,
+  force: boolean,
+  keyPaths: ReadonlySet<string> = new Set(),
+): string[] {
   const dirs = directoryRefusals(dir);
   if (dirs.length > 0) return dirs;
   const refusals: string[] = [];
@@ -130,7 +147,18 @@ export function preflight(dir: string, files: FileMap, force: boolean): string[]
   if (refusals.length > 0) return refusals;
   if (!force && conflicts.length > 0)
     return [...conflicts, "pass --force to back up and replace them"];
-  return [];
+  return keyRefusals(dir, files, keyPaths);
+}
+
+/** A new key would make the data encrypted with the old one unreadable: never replace a key. */
+function keyRefusals(dir: string, files: FileMap, keyPaths: ReadonlySet<string>): string[] {
+  const refusals: string[] = [];
+  for (const path of keyPaths) {
+    if (!files.has(path) || lstatOrUndefined(join(dir, path)) === undefined) continue;
+    if (!isSecretKeyContent(readFileSync(join(dir, path), "utf8")))
+      refusals.push(`${path}: ${INVALID_KEY_RULE}`);
+  }
+  return refusals;
 }
 
 const LINK_RULE = "is a symlink; pulse init never writes through a link";
@@ -173,6 +201,10 @@ function plan(req: WriteRequest): Planned[] {
     const stat = lstatOrUndefined(full);
     if (stat === undefined) {
       out.push({ path, entry, action: "write" });
+      continue;
+    }
+    if (req.keyPaths?.has(path)) {
+      out.push({ path, entry, action: "keep" });
       continue;
     }
     if (req.tokenPaths.has(path)) {
@@ -277,7 +309,7 @@ function releaseLock(req: WriteRequest, lockPath: string, content: string): void
 }
 
 function writeLocked(req: WriteRequest): void {
-  const lines = preflight(req.dir, req.files, req.force);
+  const lines = preflight(req.dir, req.files, req.force, req.keyPaths);
   if (lines.length > 0) throw new Refused(lines.join("\n"));
   const planned = plan(req);
   const replaced = planned.filter((p) => p.action === "replace");
@@ -311,7 +343,7 @@ function writeLocked(req: WriteRequest): void {
  * or failed, 130 when a signal arrived during the write (the write still finished).
  */
 export async function writeInstall(req: WriteRequest): Promise<number> {
-  const early = preflight(req.dir, req.files, req.force);
+  const early = preflight(req.dir, req.files, req.force, req.keyPaths);
   if (early.length > 0) {
     for (const line of early) req.err(`pulse init: ${line}`);
     return 1;

@@ -208,6 +208,34 @@ describe("pulse init --yes", () => {
   });
 });
 
+describe("random draw order", () => {
+  // seeded("pulse-test") yields sha256("pulse-test:0"), sha256("pulse-test:1"), ... in order.
+  const BLOCKS = [
+    "904452c11d314d87e6396c141d741cd1fe45b651da44574a2c75bd85ca62ded1",
+    "066b692b8c2f37b24205b56eb0d0f04ed71552036284a333e6d1976018a33ffc",
+    "dce5c2d70f741a8be94bdccc9c8202720ac245ae4cc475d87c7557c494606d92",
+    "27788a27d5bb9ba3e5a9e7b486b40cf1c9e0e29be9291b16c99574269f159270",
+  ];
+  const read = (d: string, p: string): string => readFileSync(join(d, p), "utf8");
+  const installId = (d: string): unknown => JSON.parse(read(d, "pulse.json")).installId;
+
+  test("with the console: tokens, then the key, then installId", async () => {
+    const d = tempDir();
+    expect((await run(["init", d, "--setup", "full", "--yes"])).code).toBe(0);
+    expect(read(d, "secrets/admin-token")).toBe(`${BLOCKS[0]}\n`);
+    expect(read(d, "secrets/probe-token-default")).toBe(`${BLOCKS[1]}\n`);
+    expect(read(d, "secrets/console-secret-key")).toBe(`${BLOCKS[2]}\n`);
+    expect(installId(d)).toBe(BLOCKS[3]?.slice(0, 32));
+  });
+
+  test("without the console: no key is drawn, installId follows the tokens", async () => {
+    const d = tempDir();
+    expect((await run(["init", d, "--setup", "full", "--no-console", "--yes"])).code).toBe(0);
+    expect(read(d, "secrets/probe-token-default")).toBe(`${BLOCKS[1]}\n`);
+    expect(installId(d)).toBe(BLOCKS[2]?.slice(0, 32));
+  });
+});
+
 // The answers of an interactive minimal install, all defaults: setup, status, notify, console,
 // api port, probe location, check set and "Add a check?". "Start now?" comes after them.
 const MINIMAL_ANSWERS = "minimal\n\n\n\n\n\n\n\n";

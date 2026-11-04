@@ -297,6 +297,7 @@ describe("pulse init prompts", () => {
     expect([...left.keys()].filter((k) => k.startsWith("secrets/"))).toEqual([
       "secrets/",
       "secrets/admin-token",
+      "secrets/console-secret-key",
       "secrets/probe-token-default",
     ]);
     expect(normalize(b)).toEqual(left);

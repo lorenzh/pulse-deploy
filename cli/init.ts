@@ -18,9 +18,11 @@ import { type FileMap, renderFiles, SECRET_FILE_MODE } from "./render-files.ts";
 import { loadCommon } from "./services.ts";
 import {
   generateInstallId,
+  generateSecretKey,
   generateTokens,
   INSTALL_ID_PATTERN,
   type RandomSource,
+  SECRET_KEY_PATH,
   tokenContentValid,
 } from "./tokens.ts";
 import {
@@ -172,13 +174,14 @@ async function install(flags: InitFlags, deps: InitDeps, p: Prompter | undefined
   checkDevSources(answers, dir);
   const common = loadCommon();
 
-  // Fixed draw order (Tests, "Comparing two init runs"): tokens, installId, then the lock nonce
-  // and temp names inside writeInstall.
+  // Fixed draw order (Tests, "Comparing two init runs"): tokens, the console key, installId, then
+  // the lock nonce and temp names inside writeInstall.
   const tokenPaths = [
     "secrets/admin-token",
     ...answers.locations.map((l) => `secrets/probe-token-${l}`),
   ];
   const tokens = generateTokens(deps.random, tokenPaths.length);
+  const secretKey = answers.console ? generateSecretKey(deps.random) : undefined;
   const { installId, newIdNotice } = chooseInstallId(answers, deps.random);
 
   const files: FileMap = renderFiles({
@@ -191,12 +194,15 @@ async function install(flags: InitFlags, deps: InitDeps, p: Prompter | undefined
   tokenPaths.forEach((path, i) => {
     files.set(path, { content: `${tokens[i]}\n`, mode: SECRET_FILE_MODE });
   });
+  if (secretKey !== undefined)
+    files.set(SECRET_KEY_PATH, { content: `${secretKey}\n`, mode: SECRET_FILE_MODE });
   if (p !== undefined) reportTokens(dir, tokenPaths, answers.force, deps.out);
 
   const code = await writeInstall({
     dir,
     files,
     tokenPaths: new Set(tokenPaths),
+    keyPaths: new Set([SECRET_KEY_PATH]),
     force: answers.force,
     random: deps.random,
     now: deps.now,
