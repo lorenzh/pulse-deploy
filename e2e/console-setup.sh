@@ -2,8 +2,17 @@
 # End-to-end test of the console first-run setup, sign-in and recreation against a running stack.
 # Usage: bash e2e/console-setup.sh <compose file>   (CI: dev/compose.yaml, after wait-ready)
 # Needs a fresh console-data volume, curl, jq and a console image with the setup flow.
-# Prints only "ok:" lines. It never prints a token, the setup code or the password.
+# Prints only "ok:" lines. It never prints a token, the setup code, the password, the setup key,
+# a TOTP code or a recovery code.
+# E2E_CONSOLE_FLOW: auto (default), legacy or two-factor. auto picks the flow from the Location
+# of Finish setup: /sign-in?setup=done is legacy, /account/authenticator is two-factor.
 set -euo pipefail
+
+flow_wanted=${E2E_CONSOLE_FLOW:-auto}
+case "$flow_wanted" in
+  auto | legacy | two-factor) ;;
+  *) echo "E2E_CONSOLE_FLOW must be auto, legacy or two-factor" >&2; exit 2 ;;
+esac
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -105,19 +114,18 @@ grep -qF "Checks: $checks_expected." "$body" || fail "step 5: page lacks Checks:
 token=$(csrf "step 5 result")
 ok "5 POST /setup/owner test 200 Checks: $checks_expected."
 
-# 6. Complete.
+# 6. Complete: the Location names the flow.
 status=$(owner_post complete)
 expect "step 6 complete" 303 "$status"
-expect_location "step 6" "/sign-in?setup=done"
-ok "6 POST /setup/owner complete 303 Location /sign-in?setup=done"
-
-# 7. The code is spent.
-rm -f "$jar"
-status=$(req GET /sign-in)
-token=$(csrf "step 7")
-status=$(req POST /setup --data-urlencode "csrf=$token" --data-urlencode "code=$code")
-expect "step 7 reused code" 404 "$status"
-ok "7 POST /setup reused code 404"
+case "$(location)" in
+  "/sign-in?setup=done") flow=legacy ;;
+  /account/authenticator) flow=two-factor ;;
+  *) fail "step 6: wrong Location" ;;
+esac
+if [[ "$flow_wanted" != auto && "$flow_wanted" != "$flow" ]]; then
+  fail "step 6: console has the $flow flow, E2E_CONSOLE_FLOW=$flow_wanted"
+fi
+ok "6 POST /setup/owner complete 303 flow $flow"
 
 # sign_in <password> <step>: a fresh jar, GET /sign-in, POST /sign-in; prints the status.
 sign_in() {
@@ -130,6 +138,221 @@ sign_in() {
   req POST /sign-in --data-urlencode "csrf=$token" --data-urlencode "next=${next:-/}" \
     --data-urlencode "email=$owner_email" --data-urlencode "password=$1"
 }
+
+# recreate_console <n>: recreate the console; no new setup code line, GET /setup 404.
+recreate_console() {
+  local since deadline logs n s
+  since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  dc up -d --force-recreate console >/dev/null 2>&1 || fail "step $1: recreate console"
+  deadline=$((SECONDS + T_READY))
+  until [[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/readyz" || true)" == 200 ]]; do
+    ((SECONDS < deadline)) || fail "step $1: console not ready after ${T_READY}s"
+    sleep 1
+  done
+  logs=$(dc logs --no-color --since "$since" console 2>/dev/null) || fail "step $1: console logs"
+  n=$(grep -c "setup code:" <<<"$logs" || true)
+  [[ "$n" == 0 ]] || fail "step $1: $n setup code lines after the recreate"
+  ok "$1 recreate: 0 setup code lines"
+  rm -f "$jar"
+  s=$(req GET /setup)
+  expect "step $1 GET /setup" 404 "$s"
+  ok "$1 GET /setup 404"
+}
+
+if [[ "$flow" == two-factor ]]; then
+  # The two-factor flow. Each browser has its own cookie jar: A is the owner's enrolment browser,
+  # B signs in with TOTP, C and D with a recovery code, S checks the spent setup code.
+  jar_a=$jar
+  secrets_file="$work/recovery-codes"
+  use_jar() { jar="$work/jar-$1"; [[ "$1" == A ]] && jar=$jar_a; return 0; }
+
+  # totp_after <step> <last>: waits (at most 31 s) for a TOTP step greater than <last>.
+  # Sets totp_step and totp_code; prints nothing.
+  totp_after() {
+    local line deadline=$((SECONDS + 31))
+    while :; do
+      line=$(node e2e/totp.mjs "$setup_key") || fail "$1: e2e/totp.mjs failed"
+      [[ "$line" =~ ^([0-9]+)\ ([0-9]{6})$ ]] || fail "$1: e2e/totp.mjs output"
+      if ((BASH_REMATCH[1] > $2)); then
+        totp_step=${BASH_REMATCH[1]}
+        totp_code=${BASH_REMATCH[2]}
+        return 0
+      fi
+      ((SECONDS < deadline)) || fail "$1: no new TOTP step after 31s"
+      sleep 1
+    done
+  }
+
+  # password_step <jar> <step>: a fresh jar, the right password: 303 to /sign-in/factor.
+  password_step() {
+    use_jar "$1"
+    local s
+    s=$(sign_in "$password" "$2")
+    expect "$2 password" 303 "$s"
+    expect_location "$2 password" /sign-in/factor
+    s=$(req GET /sign-in/factor)
+    expect "$2 GET /sign-in/factor" 200 "$s"
+    token=$(csrf "$2 factor")
+  }
+
+  # 7. The code is spent, from a fresh jar. Jar A keeps the enrol session.
+  use_jar S
+  status=$(req GET /sign-in)
+  token=$(csrf "step 7")
+  status=$(req POST /setup --data-urlencode "csrf=$token" --data-urlencode "code=$code")
+  expect "step 7 reused code" 404 "$status"
+  ok "7 POST /setup reused code 404"
+
+  # 8. Enrolment in jar A.
+  use_jar A
+  status=$(req GET /account/authenticator)
+  expect "step 8 GET /account/authenticator" 200 "$status"
+  token=$(csrf "step 8")
+  status=$(req POST /account/authenticator --data-urlencode "csrf=$token" --data-urlencode "action=new")
+  expect "step 8 action=new" 303 "$status"
+  expect_location "step 8 action=new" /account/authenticator
+  status=$(req GET /account/authenticator)
+  expect "step 8 GET /account/authenticator" 200 "$status"
+  setup_key=$(tr -d '\n' <"$body" | sed -n 's/.*id="totp-secret"[^>]*>\([^<]*\)<.*/\1/p' | tr -d ' ')
+  [[ "$setup_key" =~ ^[A-Z2-7]{32}$ ]] || fail "step 8: #totp-secret is not 32 base32 characters"
+  token=$(csrf "step 8 pending")
+  ok "8 action=new 303, GET /account/authenticator 200 with a setup key"
+  status=$(req GET /)
+  expect "step 8 GET / while enrolling" 303 "$status"
+  expect_location "step 8 GET /" /account/authenticator
+  ok "8 GET / 303 Location /account/authenticator"
+  totp_after "step 8" 0
+  last_step=$totp_step
+  status=$(req POST /account/authenticator --data-urlencode "csrf=$token" \
+    --data-urlencode "action=confirm" --data-urlencode "code=$totp_code")
+  expect "step 8 action=confirm" 200 "$status"
+  tr -d '\n' <"$body" | sed -n 's/.*<ol id="recovery-codes"[^>]*>\(.*\)<\/ol>.*/\1/p' |
+    grep -oE '[0-9a-f]{4}(-[0-9a-f]{4}){7}' >"$secrets_file" || true
+  n=$(sort -u "$secrets_file" | wc -l)
+  [[ "$n" -eq 10 && "$(wc -l <"$secrets_file")" -eq 10 ]] ||
+    fail "step 8: #recovery-codes does not hold 10 distinct codes"
+  ok "8 action=confirm 200 with 10 recovery codes"
+  status=$(req GET /)
+  expect "step 8 GET /" 200 "$status"
+  grep -qF "Signed in as" "$body" || fail "step 8: landing page lacks Signed in as"
+  ok "8 GET / 200 Signed in as"
+
+  # 9. Sign-in with TOTP in jar B.
+  use_jar B
+  status=$(sign_in "x${password}" "step 9 wrong")
+  expect "step 9 wrong password" 401 "$status"
+  ok "9 POST /sign-in wrong password 401"
+  password_step B "step 9"
+  ok "9 POST /sign-in 303 Location /sign-in/factor"
+  totp_after "step 9" "$last_step"
+  last_step=$totp_step
+  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" --data-urlencode "code=$totp_code")
+  expect "step 9 TOTP" 303 "$status"
+  status=$(req GET /)
+  expect "step 9 GET /" 200 "$status"
+  ok "9 POST /sign-in/factor TOTP 303, GET / 200"
+
+  # 10. A recovery code in jar C, the same code again in jar D.
+  recovery=$(head -n 1 "$secrets_file")
+  password_step C "step 10"
+  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" --data-urlencode "recovery_code=$recovery")
+  expect "step 10 recovery code" 303 "$status"
+  status=$(req GET /)
+  expect "step 10 GET /" 200 "$status"
+  ok "10 POST /sign-in/factor recovery code 303, GET / 200"
+  password_step D "step 10 reuse"
+  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" --data-urlencode "recovery_code=$recovery")
+  expect "step 10 reused recovery code" 401 "$status"
+  ok "10 POST /sign-in/factor reused recovery code 401"
+
+  # 11. Sign out all from jar A: B and C end, A stays.
+  use_jar A
+  status=$(req GET /account/sessions)
+  expect "step 11 GET /account/sessions" 200 "$status"
+  grep -qF "This browser" "$body" || fail "step 11: sessions page lacks This browser"
+  token=$(csrf "step 11")
+  status=$(req POST /account/sessions/sign-out-all --data-urlencode "csrf=$token")
+  expect "step 11 sign out all" 303 "$status"
+  expect_location "step 11 sign out all" "/account/sessions?signed-out=others"
+  ok "11 POST /account/sessions/sign-out-all 303"
+  for b in B C; do
+    use_jar "$b"
+    status=$(req GET /)
+    expect "step 11 jar $b GET /" 303 "$status"
+    expect_location "step 11 jar $b GET /" "/sign-in?next=%2F"
+  done
+  ok "11 jars B and C GET / 303 Location /sign-in?next=%2F"
+  use_jar A
+  status=$(req GET /)
+  expect "step 11 jar A GET /" 200 "$status"
+  grep -qF "Signed in as" "$body" || fail "step 11: landing page lacks Signed in as"
+  ok "11 jar A GET / 200 Signed in as"
+
+  # 12. Recreate the console; a TOTP sign-in proves that the key survived.
+  use_jar E
+  recreate_console 12
+  password_step E "step 12"
+  totp_after "step 12" "$last_step"
+  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" --data-urlencode "code=$totp_code")
+  expect "step 12 TOTP" 303 "$status"
+  status=$(req GET /)
+  expect "step 12 GET /" 200 "$status"
+  ok "12 POST /sign-in/factor TOTP 303, GET / 200 after the recreate"
+
+  # 13. Database scan: no admin token, secret key, setup key or recovery code in any file.
+  # shellcheck disable=SC2016 # expanded by the container shell
+  scan='set -u
+tok=/run/pulse/admin-token
+key=/run/pulse/secret-key
+grep -qxE "[0-9a-f]{64}" "$tok" || { echo "admin-token format"; exit 1; }
+grep -qxE "[0-9a-f]{64}" "$key" || { echo "secret-key format"; exit 1; }
+[ -n "$SETUP_KEY" ] || { echo "setup key empty"; exit 1; }
+db=/data/console.db
+[ -f "$db" ] && [ -r "$db" ] || { echo "console.db unreadable"; exit 1; }
+set -- "$db"
+for side in "$db-wal" "$db-shm"; do
+  if [ -e "$side" ]; then
+    [ -f "$side" ] && [ -r "$side" ] || { echo "sidecar unreadable"; exit 1; }
+    set -- "$@" "$side"
+  fi
+done
+total=0
+for f in "$@"; do
+  c=$(grep -a -c -F "$OWNER" "$f"); rc=$?
+  [ "$rc" -le 1 ] || { echo "email read error"; exit 1; }
+  total=$((total + c))
+done
+[ "$total" -ge 1 ] || { echo "owner email not found"; exit 1; }
+n=0
+for r in $CODES; do n=$((n + 1)); done
+[ "$n" = 10 ] || { echo "recovery codes missing"; exit 1; }
+for f in "$@"; do
+  c=$(grep -a -c -F -f "$tok" "$f"); rc=$?
+  [ "$rc" = 1 ] && [ "$c" = 0 ] || { echo "token scan failed: exit $rc"; exit 1; }
+  c=$(grep -a -c -F -f "$key" "$f"); rc=$?
+  [ "$rc" = 1 ] && [ "$c" = 0 ] || { echo "secret key scan failed: exit $rc"; exit 1; }
+  c=$(grep -a -c -F "$SETUP_KEY" "$f"); rc=$?
+  [ "$rc" = 1 ] && [ "$c" = 0 ] || { echo "setup key scan failed: exit $rc"; exit 1; }
+  for r in $CODES; do
+    c=$(grep -a -c -F "$r" "$f"); rc=$?
+    [ "$rc" = 1 ] && [ "$c" = 0 ] || { echo "recovery code scan failed: exit $rc"; exit 1; }
+  done
+done
+echo "files=$#"'
+  codes=$(tr '\n' ' ' <"$secrets_file")
+  out=$(dc exec -T -e OWNER="$owner_email" -e SETUP_KEY="$setup_key" -e CODES="$codes" \
+    console sh -c "$scan" 2>&1) || fail "step 13: ${out:-scan failed}"
+  ok "13 database scan: owner email found; admin token, secret key, setup key and recovery codes in no file (${out})"
+  exit 0
+fi
+
+# 7. The code is spent.
+rm -f "$jar"
+status=$(req GET /sign-in)
+token=$(csrf "step 7")
+status=$(req POST /setup --data-urlencode "csrf=$token" --data-urlencode "code=$code")
+expect "step 7 reused code" 404 "$status"
+ok "7 POST /setup reused code 404"
 
 # 8. Sign-in.
 status=$(sign_in "x${password}" "step 8 wrong")

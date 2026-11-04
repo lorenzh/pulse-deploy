@@ -20,7 +20,7 @@ Volumes: `api-data` (database), `notify-data` (notify ledger and the `file` chan
 ## Start, stop, reset
 
 ```sh
-scripts/init-secrets.sh                      # once: secrets/probe-token and secrets/admin-token, mode 0600
+scripts/init-secrets.sh                      # once: secrets/probe-token, admin-token and console-secret-key, mode 0600
 docker compose -f full/compose.yaml up -d
 scripts/wait-ready.sh full/compose.yaml 300
 # status page: http://localhost:8080, console: http://127.0.0.1:8082
@@ -64,7 +64,7 @@ Copy `.env.example` to `full/.env` and uncomment a line to change it. Compose re
 
 | Variable             | Default      | Meaning                                                                                    |
 | -------------------- | ------------ | ------------------------------------------------------------------------------------------ |
-| `PULSE_SECRETS_DIR`  | `../secrets` | Host directory with `probe-token` and `admin-token`, relative to `full/`. Must exist; it is never created. |
+| `PULSE_SECRETS_DIR`  | `../secrets` | Host directory with `probe-token`, `admin-token` and `console-secret-key`, relative to `full/`. Must exist; it is never created. |
 | `PULSE_LOCATION`     | `default`    | Location of the probe and of its token in the api's `tokens.json`.                        |
 | `PULSE_STATUS_PORT`  | `8080`       | Host port of the status page, on all interfaces.                                           |
 | `PULSE_CONSOLE_PORT` | `8082`       | Host port of the console, always on `127.0.0.1`. Not passed into the container.            |
@@ -82,7 +82,11 @@ The setup flow needs a console release with it. The pinned console `0.1.0` has n
 
 ### Upgrading an existing full install
 
-Run `scripts/init-secrets.sh` once more. It keeps `secrets/probe-token` and creates `secrets/admin-token`. Then `docker compose -f full/compose.yaml up -d`. If you had an admin tokens override (`compose.override.yaml` with `PULSE_API_ADMIN_TOKENS_FILE`), remove it: the api now reads `/run/pulse/admin-tokens.json` from `secrets-init`.
+Run `scripts/init-secrets.sh` once more. It keeps the existing files and creates `secrets/admin-token` and `secrets/console-secret-key`; `secrets-init` refuses to start without the key. Then `docker compose -f full/compose.yaml up -d`. If you had an admin tokens override (`compose.override.yaml` with `PULSE_API_ADMIN_TOKENS_FILE`), remove it: the api now reads `/run/pulse/admin-tokens.json` from `secrets-init`.
+
+### Console secret key
+
+The console encrypts the owner's authenticator secrets with `secrets/console-secret-key`: 64 lowercase hex characters (32 random bytes) and one newline, mode `0600`. It must differ from every token. Back it up together with the `console-data` volume; one without the other cannot sign in with an authenticator. A new or lost key makes the stored authenticators unreadable: the owner then signs in with the password and a recovery code and replaces the authenticator, which uses the new key. Never replace a working key. `secrets-init` copies it to `/run/pulse/secret-key` (`PULSE_CONSOLE_SECRET_KEY_FILE`). The pinned console `0.1.0` ignores it; `full` gets two-factor sign-in with the next console pin bump.
 
 ### Admin token
 

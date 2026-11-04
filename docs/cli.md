@@ -150,7 +150,7 @@ URLs may not hold a user name or password. Check URLs may not hold a query in `-
 | `config/api/checks.json`    | 0644       | the checks; the api reloads it when it changes                      |
 | `config/notify/notify.json` | 0644       | channels and rules (with notify)                                    |
 | `helpers/`                  | 0644 files | small scripts that the containers run, such as `secrets-init.mjs`   |
-| `secrets/`                  | 0700       | the tokens, one file each, mode 0600                                |
+| `secrets/`                  | 0700       | the tokens and, with the console, `console-secret-key`; mode 0600   |
 | `.pulse-backup/<time>/`     | 0700       | files replaced by `--force`, mode 0600                              |
 
 Image references in `compose.yaml` look like `ghcr.io/lorenzh/pulse-api:<version>@sha256:<digest>`. Each CLI release writes the versions it was built with.
@@ -158,6 +158,7 @@ Image references in `compose.yaml` look like `ghcr.io/lorenzh/pulse-api:<version
 ## Tokens
 
 - Each token is 64 lower-case hex characters (32 random bytes): `secrets/admin-token` and one `secrets/probe-token-<location>` per probe location.
+- With the console, `pulse init` also writes `secrets/console-secret-key`: 64 lower-case hex characters and a newline, mode 0600. The console encrypts the owner's authenticator secrets with it. `secrets-init` copies it to `/run/pulse/secret-key` (`PULSE_CONSOLE_SECRET_KEY_FILE`). Back it up together with the `console-data` volume. A new or lost key makes the stored authenticators unreadable; the owner then signs in with a recovery code and replaces the authenticator. Without the console, no key is written.
 - `secrets-init` copies them into the containers' secret volumes at each start. No token is in `compose.yaml`, `.env` or `pulse.json`, and the CLI never prints one.
 - `pulse init --force` keeps every valid token file (at least 16 printable characters and no placeholder). It does not rotate tokens.
 - An api with the database token store (every pulse-api build after `0.1.0` that contains the store) needs at least 32 characters for an admin token at its first import. The CLI generates 64.
@@ -178,7 +179,7 @@ Heartbeat checks and header secrets of checks are not asked by the CLI. Add them
 
 ## Backups and `--force`
 
-A second `pulse init` in the same directory exits 1, lists the files that exist and changes nothing. With `--force`, it moves each file it replaces into `.pulse-backup/<time>/`, keeps valid tokens and writes the rest. It writes a new `installId`; the old one is in the backup's `pulse.json`. To keep the volumes of the earlier install, copy the old `installId` back into `pulse.json` and into the volume labels of `compose.yaml`.
+A second `pulse init` in the same directory exits 1, lists the files that exist and changes nothing. With `--force`, it moves each file it replaces into `.pulse-backup/<time>/`, keeps valid tokens and a valid `console-secret-key`, and writes the rest. An invalid existing key stops it before any write: `secrets/console-secret-key: is not a valid key (64 lowercase hex characters); fix or remove it`. It writes a new `installId`; the old one is in the backup's `pulse.json`. To keep the volumes of the earlier install, copy the old `installId` back into `pulse.json` and into the volume labels of `compose.yaml`.
 
 ## dev
 
@@ -198,7 +199,7 @@ The console keeps its accounts and sessions in the volume `console-data` (mounte
 
 `.env` holds `PULSE_CONSOLE_PUBLIC_URL`, from `--console-url`. The default `http://127.0.0.1:<port>` is loopback mode. Behind TLS, set it to the public `https://` origin.
 
-`pulse down --volumes` deletes `console-data`: every account and session is gone, and the next start asks for a new setup code. The pinned console `0.1.0` ignores the volume and the URL; the setup flow arrives with the next console pin bump in a CLI release.
+`pulse down --volumes` deletes `console-data`: every account and session is gone, and the next start asks for a new setup code. The pinned console `0.1.0` ignores the volume and the URL; the setup flow arrives with the next console pin bump in a CLI release. Two-factor sign-in (TOTP and recovery codes) also arrives with a console pin bump; installs made before this CLI release need `secrets/console-secret-key` first: run `pulse init --force` with the same answers, which keeps the tokens and adds the key.
 
 ## Demo maintenance windows
 
