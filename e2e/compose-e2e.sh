@@ -312,6 +312,17 @@ echo "ok: $regular_checks holds no e2e check"
 if [[ ! -e "$secrets_dir" ]]; then
   created_secrets=1
 fi
+# The e2e admin token goes in first, so secrets-init hands the same token to the api and the
+# console; init-secrets.sh keeps it and adds the probe token.
+(
+  umask 077
+  mkdir -p "$secrets_dir"
+  chmod 700 "$secrets_dir"
+  admin_tmp=$(mktemp "$secrets_dir/.admin-token.XXXXXXXXXX")
+  printf '%s\n' "${E2E_ADMIN_TOKEN:-e2e-admin-token-sentinel-0123456789abcdef}" >"$admin_tmp"
+  chmod 600 "$admin_tmp"
+  mv -f "$admin_tmp" "$secrets_dir/admin-token"
+)
 scripts/init-secrets.sh --dir "$secrets_dir"
 # Hard-coded on purpose: a list derived from full/compose.yaml would accept any extra service.
 regular_services=$(docker compose -f full/compose.yaml config --services | sort | paste -sd' ' -)
@@ -355,7 +366,7 @@ done
 wait_for "$T_UP" "GET /readyz on the api answers ok" api_readyz_ok
 wait_for "$T_UP" "GET /readyz on the console answers ok" console_readyz_ok
 console_headers=$(mktemp)
-console_page=$(curl -fsS --max-time 5 -D "$console_headers" "http://127.0.0.1:${console_port}/")
+console_page=$(curl -fsSL --max-time 5 -D "$console_headers" "http://127.0.0.1:${console_port}/")
 console_frame=$(tr -d '\r' <"$console_headers" | grep -ix 'x-frame-options: DENY' || true)
 rm -f "$console_headers"
 grep -qF 'pulse Console' <<<"$console_page" || fail "GET / on the console does not contain 'pulse Console'"

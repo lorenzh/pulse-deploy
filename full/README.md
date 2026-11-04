@@ -11,21 +11,21 @@ The whole pulse on the published images: api, one probe, status page, notify and
 | `probe`        | `ghcr.io/lorenzh/pulse-probe`            | none                                           | `secrets-init`; api and status healthy |
 | `status`       | `ghcr.io/lorenzh/pulse-status`           | `${PULSE_STATUS_PORT:-8080}` → 8080, all interfaces | api healthy                  |
 | `notify`       | `ghcr.io/lorenzh/pulse-notify`           | none                                           | api healthy                       |
-| `console`      | `ghcr.io/lorenzh/pulse-console`          | `127.0.0.1:${PULSE_CONSOLE_PORT:-8082}` → 8082 | api healthy                       |
+| `console`      | `ghcr.io/lorenzh/pulse-console`          | `127.0.0.1:${PULSE_CONSOLE_PORT:-8082}` → 8082 | `secrets-init` exited 0; api healthy |
 
-The api is not published. The status page on port 8080 serves a filtered, read-only subset of it (`/api/uptime`, `/api/checks`, `/api/maintenance`, `/api/incidents`). `PULSE_STATUS_SHOW_CHECKS` is `true`, so the page lists the checks by name. status and console have a 5 s healthcheck interval. The console has nothing to manage yet.
+The api is not published. The status page on port 8080 serves a filtered, read-only subset of it (`/api/uptime`, `/api/checks`, `/api/maintenance`, `/api/incidents`). `PULSE_STATUS_SHOW_CHECKS` is `true`, so the page lists the checks by name. status and console have a 5 s healthcheck interval.
 
-Volumes: `api-data` (database), `notify-data` (notify ledger and the `file` channel output), `api-secrets` and `probe-secrets` (written by `secrets-init`).
+Volumes: `api-data` (database), `notify-data` (notify ledger and the `file` channel output), `console-data` (console accounts and sessions), `api-secrets`, `probe-secrets` and `console-secrets` (written by `secrets-init`).
 
 ## Start, stop, reset
 
 ```sh
-scripts/init-secrets.sh                      # once: secrets/probe-token, mode 0600
+scripts/init-secrets.sh                      # once: secrets/probe-token and secrets/admin-token, mode 0600
 docker compose -f full/compose.yaml up -d
 scripts/wait-ready.sh full/compose.yaml 300
 # status page: http://localhost:8080, console: http://127.0.0.1:8082
 docker compose -f full/compose.yaml down      # stop; api-data and notify-data stay
-docker compose -f full/compose.yaml down -v   # reset: also deletes the database and the ledger
+docker compose -f full/compose.yaml down -v   # reset: also deletes the database, the ledger and the console accounts
 ```
 
 Inside `full/`, plain `docker compose ps`, `logs` or `kill -s HUP api` address the same project.
@@ -64,43 +64,26 @@ Copy `.env.example` to `full/.env` and uncomment a line to change it. Compose re
 
 | Variable             | Default      | Meaning                                                                                    |
 | -------------------- | ------------ | ------------------------------------------------------------------------------------------ |
-| `PULSE_SECRETS_DIR`  | `../secrets` | Host directory with `probe-token`, relative to `full/`. Must exist; it is never created.   |
+| `PULSE_SECRETS_DIR`  | `../secrets` | Host directory with `probe-token` and `admin-token`, relative to `full/`. Must exist; it is never created. |
 | `PULSE_LOCATION`     | `default`    | Location of the probe and of its token in the api's `tokens.json`.                        |
 | `PULSE_STATUS_PORT`  | `8080`       | Host port of the status page, on all interfaces.                                           |
 | `PULSE_CONSOLE_PORT` | `8082`       | Host port of the console, always on `127.0.0.1`. Not passed into the container.            |
+| `PULSE_CONSOLE_PUBLIC_URL` | empty  | Public origin of the console behind a TLS reverse proxy. Empty: loopback mode.             |
 
-## Opting in to admin tokens
+## Console: first-run setup and sign-in
 
-The api's admin routes (manual incidents, config writes) are off by default. To turn them on, give the api an admin tokens file outside `/run/pulse`, which belongs to the read-only secrets volume alone.
+The console keeps its local accounts and sessions in the volume `console-data` (`/data`). It reads the admin token from `console-secrets` (`/run/pulse/admin-token`), which `secrets-init` copies from `secrets/admin-token`. The api gets the same token in `/run/pulse/admin-tokens.json` and imports it once.
 
-Create the file so that only the container user `bun` (uid 1000) can read it. The host owner and mode survive a bind mount, so they must be right on the host. From the repository root:
+- First run: the console prints a one-time setup code to its log. Read it with `docker compose -f full/compose.yaml logs console | grep 'setup code'`, open `/setup`, enter the code and create the owner account. Then sign in at `/sign-in`.
+- TLS reverse proxy: set `PULSE_CONSOLE_PUBLIC_URL` to the public origin (for example `https://console.example.com`) in `full/.env`. Empty means loopback mode on `http://127.0.0.1:${PULSE_CONSOLE_PORT}`.
+- Reset the console (destructive: deletes every console account and session): `docker compose -f full/compose.yaml stop console`, `docker compose -f full/compose.yaml rm -f console`, `docker volume rm pulse_console-data`, then `up -d`. A new setup code appears.
 
-```sh
-umask 077
-mkdir -p secrets/admin
-# Generates the token into the file; it is never shown on the terminal.
-printf '{"tokens":[{"name":"ops","token":"%s"}]}\n' "$(openssl rand -hex 32)" >secrets/admin/admin-tokens.json
-sudo chown 1000:1000 secrets/admin secrets/admin/admin-tokens.json
-sudo chmod 0400 secrets/admin/admin-tokens.json
-sudo chmod 0500 secrets/admin
-```
+The setup flow needs a console release with it. The pinned console `0.1.0` has no `/data` and ignores the volume and the admin token; `full` gets the setup flow with the next console pin bump.
 
-An api with the database token store (every pulse-api build after `0.1.0` that contains the store) needs at least 32 characters per admin token; `openssl rand -hex 32` gives 64. That api reads the file only at its first start and imports the tokens into its database. Later changes to the file are ignored; rotate admin tokens over HTTP as the [token rotation docs](https://github.com/lorenzh/pulse-api/blob/main/docs/operation.md#token-rotation) describe. The pinned api `0.1.0` reads the file at every start.
+### Upgrading an existing full install
 
-Then add `full/compose.override.yaml`:
+Run `scripts/init-secrets.sh` once more. It keeps `secrets/probe-token` and creates `secrets/admin-token`. Then `docker compose -f full/compose.yaml up -d`. If you had an admin tokens override (`compose.override.yaml` with `PULSE_API_ADMIN_TOKENS_FILE`), remove it: the api now reads `/run/pulse/admin-tokens.json` from `secrets-init`.
 
-```yaml
-services:
-  api:
-    environment:
-      PULSE_API_ADMIN_TOKENS_FILE: /run/pulse-admin/admin-tokens.json
-    volumes:
-      - type: bind
-        source: ../secrets/admin
-        target: /run/pulse-admin
-        read_only: true
-        bind:
-          create_host_path: false
-```
+### Admin token
 
-Compose loads `compose.override.yaml` on its own only without `-f`, so start with `cd full && docker compose up -d`, or with `docker compose -f full/compose.yaml -f full/compose.override.yaml up -d`. Read the token with `sudo cat secrets/admin/admin-tokens.json`. The file format is in the [pulse-api configuration docs](https://github.com/lorenzh/pulse-api/blob/main/docs/configuration.md#admin-tokensjson). The file is gitignored: `scripts/check-setup.sh` (rule 11) fails when an override is committed, because the static checks never read it.
+`secrets/admin-token` is the api admin token, at least 32 characters (`init-secrets.sh` writes 64 hex characters). The api's admin routes (manual incidents, config writes) accept it. An api with the database token store imports it only at its first start; rotate it over HTTP as the [token rotation docs](https://github.com/lorenzh/pulse-api/blob/main/docs/operation.md#token-rotation) describe. The pinned api `0.1.0` reads the file at every start. Read it with `cat secrets/admin-token`.

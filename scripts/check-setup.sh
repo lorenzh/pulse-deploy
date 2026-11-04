@@ -152,9 +152,14 @@ trap 'rm -rf "$tmp"' EXIT
 [[ "$(stat -c %a "$tmp/s")" == "700" ]] || fail "rule 7: the secrets directory is not mode 700"
 [[ "$(stat -c %a "$tmp/s/probe-token")" == "600" ]] || fail "rule 7: probe-token is not mode 600"
 grep -qxE '[0-9a-f]{64}' "$tmp/s/probe-token" || fail "rule 7: probe-token is not 64 hex characters"
+[[ -f "$tmp/s/admin-token" ]] || fail "rule 7: admin-token is missing"
+[[ "$(stat -c %a "$tmp/s/admin-token")" == "600" ]] || fail "rule 7: admin-token is not mode 600"
+grep -qxE '[0-9a-f]{64}' "$tmp/s/admin-token" || fail "rule 7: admin-token is not 64 hex characters"
 before=$(sha256sum <"$tmp/s/probe-token")
+before_admin=$(sha256sum <"$tmp/s/admin-token")
 "$script_dir/init-secrets.sh" --dir "$tmp/s" >/dev/null
 [[ "$(sha256sum <"$tmp/s/probe-token")" == "$before" ]] || fail "rule 7: a second run changed probe-token"
-ok "rule 7: init-secrets.sh writes 700/600 and keeps an existing token"
+[[ "$(sha256sum <"$tmp/s/admin-token")" == "$before_admin" ]] || fail "rule 7: a second run changed admin-token"
+ok "rule 7: init-secrets.sh writes 700/600 probe and admin tokens and keeps existing tokens"
 
 echo "check-setup: all rules passed"

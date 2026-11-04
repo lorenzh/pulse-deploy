@@ -57,13 +57,14 @@ The install directory works with plain `docker compose` too. Install, the prompt
 
 ## Secrets
 
-No setup holds a token, password or secret. The probe token lives in one host file:
+No setup holds a token, password or secret. The probe token and the console admin token live in host files:
 
-1. `scripts/init-secrets.sh [--dir <dir>]` creates `secrets/` (mode `0700`) and writes `secrets/probe-token`: 32 random bytes as 64 hex characters, mode `0600`. It never overwrites an existing file and prints the path, never the value. `secrets/` is in `.gitignore`.
+1. `scripts/init-secrets.sh [--dir <dir>]` creates `secrets/` (mode `0700`) and writes `secrets/probe-token` and `secrets/admin-token`: each 32 random bytes as 64 hex characters, mode `0600`. Each file is created on its own; an existing file is never overwritten. It prints the paths, never a value. `secrets/` is in `.gitignore`. An existing `full` or `dev` install: run it once more to add `admin-token`.
 2. At each start the one-shot service `secrets-init` reads `secrets/probe-token` through a read-only bind mount and copies it into per-consumer named volumes, owned by the container user `bun` (uid 1000) with mode `0400`:
    - `api-secrets`, mounted read-only at `/run/pulse` in the api: `tokens.json` = `{"tokens":[{"location":<PULSE_LOCATION>,"token":<token>}]}`;
-   - `probe-secrets`, mounted read-only at `/run/pulse` in the probe: `probe-token`.
-3. api and probe start only after `secrets-init` has exited with code 0.
+   - `probe-secrets`, mounted read-only at `/run/pulse` in the probe: `probe-token`;
+   - in `full`, `dev` and `demo` (`PULSE_SECRETS_ADMIN=on`): `admin-tokens.json` = `{"tokens":[{"name":"admin","token":<admin token>}]}` in `api-secrets`, and `admin-token` in `console-secrets`, mounted read-only at `/run/pulse` in the console.
+3. api, probe and console start only after `secrets-init` has exited with code 0.
 
 `secrets-init` refuses, with one line on stderr that names the file and the rule (never the content):
 
@@ -73,12 +74,16 @@ No setup holds a token, password or secret. The probe token lives in one host fi
 
 A missing `secrets/` directory makes `up` fail with `bind source path does not exist`; Compose never creates it as root. `PULSE_SECRETS_DIR` (default `../secrets`, relative to the setup directory) points to another directory.
 
-`secrets-init` runs as root with no network and only the capabilities `CHOWN`, `DAC_OVERRIDE` and `FOWNER`, because the host file's owner and mode survive a bind mount. The demo has no host secret: its `secrets-init` generates one token per location and keeps them on a rerun.
+`secrets-init` runs as root with no network and only the capabilities `CHOWN`, `DAC_OVERRIDE` and `FOWNER`, because the host file's owner and mode survive a bind mount. The demo has no host secret: its `secrets-init` generates one token per location and the console admin token, and keeps them on a rerun (an admin token is kept when it has at least 32 valid characters).
 
 Token rotation depends on the api version:
 
 - With the pinned api `0.1.0`, which reads its token files at every start: to rotate the probe token, delete `secrets/probe-token`, run `scripts/init-secrets.sh`, then `docker compose -f <setup>/compose.yaml up -d --force-recreate`.
 - With an api that has the database token store (every pulse-api build after `0.1.0` that contains the store): the api imports the token files once, at its first start, and then ignores them. A new file value alone locks the probe or console out (`401`). To rotate a probe or admin token, call `POST /admin/tokens/<id>/rotate` (see [token rotation](https://github.com/lorenzh/pulse-api/blob/main/docs/operation.md#token-rotation)). Within the 10-minute overlap, write the returned secret into `secrets/probe-token[-<location>]` or `secrets/admin-token` (mode 0600), then `docker compose -f <setup>/compose.yaml up -d --force-recreate`. `secrets-init` copies it to the probe or console.
+
+## Console accounts
+
+In `full`, `dev` and `demo` the console stores its local accounts in the volume `console-data`. At the first start it logs a one-time setup code: `docker compose -f <setup>/compose.yaml logs console | grep 'setup code'`. Open `/setup`, enter the code, create the owner and sign in. Behind a TLS reverse proxy set `PULSE_CONSOLE_PUBLIC_URL` to the public origin. `docker volume rm <project>_console-data` (after stopping and removing the console container) resets the console and deletes every account; it cannot be undone. `full` and `demo` get the setup flow with the next console pin bump; the pinned console `0.1.0` ignores the volume. See each setup's README.
 
 ## Host ports
 
@@ -118,7 +123,7 @@ scripts/bump-images.sh --check-latest          # fails when a higher x.y.z relea
 
 ## End-to-end test
 
-`bash e2e/compose-e2e.sh` tests `full` on the published images, with the test-only overlay `e2e/compose.e2e.yaml` (api on loopback, an e2e target, a throwaway admin token). It uses its own project `pulse-e2e` and its own throwaway secrets in `e2e/.secrets/`, and ends with `==> All checks passed`. It needs ports 3000, 8080 and 8082 free, curl and jq, and takes about 4 minutes. Timeouts can be raised with `E2E_TIMEOUT_*` variables (see the top of the script).
+`bash e2e/compose-e2e.sh` tests `full` on the published images, with the test-only overlay `e2e/compose.e2e.yaml` (api on loopback, an e2e target). It writes a throwaway admin token to `e2e/.secrets/admin-token` before `init-secrets.sh`, so the api and the console share it. It uses its own project `pulse-e2e` and its own throwaway secrets in `e2e/.secrets/`, and ends with `==> All checks passed`. It needs ports 3000, 8080 and 8082 free, curl and jq, and takes about 4 minutes. Timeouts can be raised with `E2E_TIMEOUT_*` variables (see the top of the script).
 
 ## Checks
 

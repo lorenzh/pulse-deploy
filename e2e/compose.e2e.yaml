@@ -4,17 +4,11 @@
 services:
   api:
     environment:
-      # Enables the write routes; the token is a throwaway of this test stack. Not under
-      # /run/pulse: that is the read-only secrets volume, which cannot hold a config file.
-      PULSE_API_ADMIN_TOKENS_FILE: /run/pulse-admin/admin-tokens.json
       # The admin routes write the checks file, so it comes from a writable directory mount
       # (a copy made by e2e/compose-e2e.sh). The regular read-only mount below stays, for the
       # test that a read-only file answers 503.
       PULSE_CHECKS_FILE: /config-rw/checks.json
       PULSE_CHECKS_RELOAD_INTERVAL_MS: "2000"
-    configs:
-      - source: admin-tokens
-        target: /run/pulse-admin/admin-tokens.json
     volumes:
       # Same target path as in full/compose.yaml, so this replaces the regular read-only directory.
       - ../e2e/ro:/config:ro
@@ -54,8 +48,3 @@ services:
       PULSE_HEADER_SVC_TOKEN: ${E2E_SVC_TOKEN:-e2e-svc-token-sentinel}
     volumes:
       - ../e2e/target.mjs:/e2e/target.mjs:ro
-
-configs:
-  admin-tokens:
-    content: |
-      {"tokens": [{"name": "e2e", "token": "${E2E_ADMIN_TOKEN:-e2e-admin-token-sentinel-0123456789abcdef}"}]}

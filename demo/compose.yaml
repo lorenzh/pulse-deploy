@@ -11,6 +11,8 @@ services:
     environment:
       PULSE_SECRETS_MODE: generate
       PULSE_DEMO_LOCATIONS: eu,us
+      # Keeps or creates the console admin token; the api imports it once.
+      PULSE_SECRETS_ADMIN: "on"
     volumes:
       - type: bind
         source: ../scripts/secrets-init.mjs
@@ -21,6 +23,7 @@ services:
       - api-secrets:/out/api
       - probe-eu-secrets:/out/probe-eu
       - probe-us-secrets:/out/probe-us
+      - console-secrets:/out/console
 
   # Writes the checks file, with maintenance windows relative to the start time. Root, because a
   # fresh named volume is owned by root; it has no capabilities and no network use.
@@ -72,6 +75,7 @@ services:
   api:
     extends: { file: ../common/services.yaml, service: api }
     environment:
+      PULSE_API_ADMIN_TOKENS_FILE: /run/pulse/admin-tokens.json
       PULSE_CHECKS_FILE: /shared/checks.json
     volumes:
       - api-data:/data
@@ -137,16 +141,27 @@ services:
 
   console:
     extends: { file: ../common/services.yaml, service: console }
+    environment:
+      PULSE_CONSOLE_ADMIN_TOKEN_FILE: /run/pulse/admin-token
+      # The public origin behind a TLS reverse proxy; empty means loopback mode.
+      PULSE_CONSOLE_PUBLIC_URL: ${PULSE_CONSOLE_PUBLIC_URL:-}
+    volumes:
+      - console-secrets:/run/pulse:ro
+      - console-data:/data
     ports:
       - "127.0.0.1:${PULSE_CONSOLE_PORT:-8082}:8082"
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       api:
         condition: service_healthy
 
 volumes:
   api-data:
   notify-data:
+  console-data:
   demo-config:
   api-secrets:
   probe-eu-secrets:
   probe-us-secrets:
+  console-secrets:

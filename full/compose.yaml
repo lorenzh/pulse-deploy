@@ -8,6 +8,8 @@ services:
     extends: { file: ../common/services.yaml, service: secrets-init }
     environment:
       PULSE_LOCATION: ${PULSE_LOCATION:-default}
+      # Copies <secrets dir>/admin-token for the api (one-time import) and the console.
+      PULSE_SECRETS_ADMIN: "on"
     volumes:
       # Long syntax: a missing host directory fails `up` instead of being created as root.
       - type: bind
@@ -24,10 +26,12 @@ services:
           create_host_path: false
       - api-secrets:/out/api
       - probe-secrets:/out/probe
+      - console-secrets:/out/console
 
   api:
     extends: { file: ../common/services.yaml, service: api }
     environment:
+      PULSE_API_ADMIN_TOKENS_FILE: /run/pulse/admin-tokens.json
       PULSE_CHECKS_FILE: /config/checks.json
     volumes:
       - api-data:/data
@@ -76,15 +80,26 @@ services:
 
   console:
     extends: { file: ../common/services.yaml, service: console }
+    environment:
+      PULSE_CONSOLE_ADMIN_TOKEN_FILE: /run/pulse/admin-token
+      # The public origin behind a TLS reverse proxy; empty means loopback mode.
+      PULSE_CONSOLE_PUBLIC_URL: ${PULSE_CONSOLE_PUBLIC_URL:-}
+    volumes:
+      - console-secrets:/run/pulse:ro
+      - console-data:/data
     ports:
       # Admin UI: loopback only.
       - "127.0.0.1:${PULSE_CONSOLE_PORT:-8082}:8082"
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       api:
         condition: service_healthy
 
 volumes:
   api-data:
   notify-data:
+  console-data:
   api-secrets:
   probe-secrets:
+  console-secrets:
