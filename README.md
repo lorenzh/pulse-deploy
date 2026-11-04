@@ -139,7 +139,9 @@ The console answers Finish setup in one of two ways, and the script picks the fl
 - `legacy` (`/sign-in?setup=done`, console #562): steps 7 to 10 as above.
 - `two-factor` (`/account/authenticator`): enrolment with a TOTP code from `node e2e/totp.mjs <base32 key>` and 10 recovery codes, a TOTP sign-in, a recovery code that works once, sign out all (other browsers end, this one stays), a console recreate with a TOTP sign-in that proves the key survived, and a database scan for the admin token, the secret key, the setup key and the recovery codes. Each browser has its own cookie jar.
 
-The CI `dev` job runs `auto`. The CI `dev` job runs it before teardown. A second run on the same volumes fails at step 1, because the console prints no new code once the owner exists. It needs a console with the setup flow, so it does not run against `full` until the console pin bump.
+When a form carries a `form_token` field, every POST sends it back; without one the POSTs stay as before. In the legacy flow, step 8b sends the successful sign-in POST again and expects `409 Already submitted`, or prints `ok: 8b replay check skipped: console without form_token` when the console has no form token.
+
+The CI `dev` job runs `auto` before teardown. A second run on the same volumes fails at step 1, because the console prints no new code once the owner exists. It needs a console with the setup flow, so it does not run against `full` until the console pin bump.
 
 ## Checks
 

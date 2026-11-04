@@ -62,6 +62,15 @@ csrf() {
   [[ -n "$v" ]] || fail "$1: no csrf field"
   printf '%s' "$v"
 }
+# form_token_args: sets the array ftok to the form_token field of the last body, or to nothing.
+# Console versions without form tokens get no extra field, so the POST stays as before.
+ftok=()
+form_token_args() {
+  local v
+  v=$(sed -n 's/.*name="form_token" value="\([^"]*\)".*/\1/p' "$body" | head -n 1)
+  ftok=()
+  [[ -z "$v" ]] || ftok=(--data-urlencode "form_token=$v")
+}
 expect() { # expect <step> <want> <got>
   [[ "$3" == "$2" ]] || fail "$1: status $3, want $2"
 }
@@ -81,17 +90,19 @@ ok "1 setup code found in the console log"
 status=$(req GET /setup)
 expect "step 2 GET /setup" 200 "$status"
 token=$(csrf "step 2")
+form_token_args
 ok "2 GET /setup 200"
 
 # 3. A wrong code.
 wrong_code="wrong-setup-code"
-status=$(req POST /setup --data-urlencode "csrf=$token" --data-urlencode "code=$wrong_code")
+status=$(req POST /setup --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "code=$wrong_code")
 expect "step 3 wrong code" 401 "$status"
 token=$(csrf "step 3")
+form_token_args
 ok "3 POST /setup wrong code 401"
 
 # 4. The right code.
-status=$(req POST /setup --data-urlencode "csrf=$token" --data-urlencode "code=$code")
+status=$(req POST /setup --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "code=$code")
 expect "step 4 setup code" 303 "$status"
 expect_location "step 4" /setup/owner
 ok "4 POST /setup 303 Location /setup/owner"
@@ -99,9 +110,10 @@ ok "4 POST /setup 303 Location /setup/owner"
 status=$(req GET /setup/owner)
 expect "step 5 GET /setup/owner" 200 "$status"
 token=$(csrf "step 5")
+form_token_args
 
 owner_post() { # owner_post <action>
-  req POST /setup/owner --data-urlencode "csrf=$token" --data-urlencode "action=$1" \
+  req POST /setup/owner --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "action=$1" \
     --data-urlencode "api_url=$api_url" --data-urlencode "email=$owner_email" \
     --data-urlencode "name=$owner_name" --data-urlencode "password=$password" \
     --data-urlencode "password_confirm=$password"
@@ -112,6 +124,7 @@ status=$(owner_post test)
 expect "step 5 connection test" 200 "$status"
 grep -qF "Checks: $checks_expected." "$body" || fail "step 5: page lacks Checks: $checks_expected."
 token=$(csrf "step 5 result")
+form_token_args
 ok "5 POST /setup/owner test 200 Checks: $checks_expected."
 
 # 6. Complete: the Location names the flow.
@@ -127,16 +140,20 @@ if [[ "$flow_wanted" != auto && "$flow_wanted" != "$flow" ]]; then
 fi
 ok "6 POST /setup/owner complete 303 flow $flow"
 
-# sign_in <password> <step>: a fresh jar, GET /sign-in, POST /sign-in; prints the status.
+# sign_in <password> <step>: a fresh jar, GET /sign-in, POST /sign-in. It sets status, and
+# sign_in_args to the POST fields, so step 8b can send the identical POST again.
+sign_in_args=()
 sign_in() {
   rm -f "$jar"
   local s next
   s=$(req GET /sign-in)
   expect "$2 GET /sign-in" 200 "$s"
   token=$(csrf "$2")
+  form_token_args
   next=$(sed -n 's/.*name="next" value="\([^"]*\)".*/\1/p' "$body" | head -n 1)
-  req POST /sign-in --data-urlencode "csrf=$token" --data-urlencode "next=${next:-/}" \
-    --data-urlencode "email=$owner_email" --data-urlencode "password=$1"
+  sign_in_args=(--data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "next=${next:-/}"
+    --data-urlencode "email=$owner_email" --data-urlencode "password=$1")
+  status=$(req POST /sign-in "${sign_in_args[@]}")
 }
 
 # recreate_console <n>: recreate the console; no new setup code line, GET /setup 404.
@@ -187,19 +204,21 @@ if [[ "$flow" == two-factor ]]; then
   password_step() {
     use_jar "$1"
     local s
-    s=$(sign_in "$password" "$2")
-    expect "$2 password" 303 "$s"
+    sign_in "$password" "$2"
+    expect "$2 password" 303 "$status"
     expect_location "$2 password" /sign-in/factor
     s=$(req GET /sign-in/factor)
     expect "$2 GET /sign-in/factor" 200 "$s"
     token=$(csrf "$2 factor")
+    form_token_args
   }
 
   # 7. The code is spent, from a fresh jar. Jar A keeps the enrol session.
   use_jar S
   status=$(req GET /sign-in)
   token=$(csrf "step 7")
-  status=$(req POST /setup --data-urlencode "csrf=$token" --data-urlencode "code=$code")
+  form_token_args
+  status=$(req POST /setup --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "code=$code")
   expect "step 7 reused code" 404 "$status"
   ok "7 POST /setup reused code 404"
 
@@ -208,7 +227,8 @@ if [[ "$flow" == two-factor ]]; then
   status=$(req GET /account/authenticator)
   expect "step 8 GET /account/authenticator" 200 "$status"
   token=$(csrf "step 8")
-  status=$(req POST /account/authenticator --data-urlencode "csrf=$token" --data-urlencode "action=new")
+  form_token_args
+  status=$(req POST /account/authenticator --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "action=new")
   expect "step 8 action=new" 303 "$status"
   expect_location "step 8 action=new" /account/authenticator
   status=$(req GET /account/authenticator)
@@ -216,6 +236,7 @@ if [[ "$flow" == two-factor ]]; then
   setup_key=$(tr -d '\n' <"$body" | sed -n 's/.*id="totp-secret"[^>]*>\([^<]*\)<.*/\1/p' | tr -d ' ')
   [[ "$setup_key" =~ ^[A-Z2-7]{32}$ ]] || fail "step 8: #totp-secret is not 32 base32 characters"
   token=$(csrf "step 8 pending")
+  form_token_args
   ok "8 action=new 303, GET /account/authenticator 200 with a setup key"
   status=$(req GET /)
   expect "step 8 GET / while enrolling" 303 "$status"
@@ -223,7 +244,7 @@ if [[ "$flow" == two-factor ]]; then
   ok "8 GET / 303 Location /account/authenticator"
   totp_after "step 8" 0
   last_step=$totp_step
-  status=$(req POST /account/authenticator --data-urlencode "csrf=$token" \
+  status=$(req POST /account/authenticator --data-urlencode "csrf=$token" "${ftok[@]}" \
     --data-urlencode "action=confirm" --data-urlencode "code=$totp_code")
   expect "step 8 action=confirm" 200 "$status"
   tr -d '\n' <"$body" | sed -n 's/.*<ol id="recovery-codes"[^>]*>\(.*\)<\/ol>.*/\1/p' |
@@ -239,14 +260,14 @@ if [[ "$flow" == two-factor ]]; then
 
   # 9. Sign-in with TOTP in jar B.
   use_jar B
-  status=$(sign_in "x${password}" "step 9 wrong")
+  sign_in "x${password}" "step 9 wrong"
   expect "step 9 wrong password" 401 "$status"
   ok "9 POST /sign-in wrong password 401"
   password_step B "step 9"
   ok "9 POST /sign-in 303 Location /sign-in/factor"
   totp_after "step 9" "$last_step"
   last_step=$totp_step
-  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" --data-urlencode "code=$totp_code")
+  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "code=$totp_code")
   expect "step 9 TOTP" 303 "$status"
   status=$(req GET /)
   expect "step 9 GET /" 200 "$status"
@@ -255,13 +276,13 @@ if [[ "$flow" == two-factor ]]; then
   # 10. A recovery code in jar C, the same code again in jar D.
   recovery=$(head -n 1 "$secrets_file")
   password_step C "step 10"
-  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" --data-urlencode "recovery_code=$recovery")
+  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "recovery_code=$recovery")
   expect "step 10 recovery code" 303 "$status"
   status=$(req GET /)
   expect "step 10 GET /" 200 "$status"
   ok "10 POST /sign-in/factor recovery code 303, GET / 200"
   password_step D "step 10 reuse"
-  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" --data-urlencode "recovery_code=$recovery")
+  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "recovery_code=$recovery")
   expect "step 10 reused recovery code" 401 "$status"
   ok "10 POST /sign-in/factor reused recovery code 401"
 
@@ -271,7 +292,8 @@ if [[ "$flow" == two-factor ]]; then
   expect "step 11 GET /account/sessions" 200 "$status"
   grep -qF "This browser" "$body" || fail "step 11: sessions page lacks This browser"
   token=$(csrf "step 11")
-  status=$(req POST /account/sessions/sign-out-all --data-urlencode "csrf=$token")
+  form_token_args
+  status=$(req POST /account/sessions/sign-out-all --data-urlencode "csrf=$token" "${ftok[@]}")
   expect "step 11 sign out all" 303 "$status"
   expect_location "step 11 sign out all" "/account/sessions?signed-out=others"
   ok "11 POST /account/sessions/sign-out-all 303"
@@ -293,7 +315,7 @@ if [[ "$flow" == two-factor ]]; then
   recreate_console 12
   password_step E "step 12"
   totp_after "step 12" "$last_step"
-  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" --data-urlencode "code=$totp_code")
+  status=$(req POST /sign-in/factor --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "code=$totp_code")
   expect "step 12 TOTP" 303 "$status"
   status=$(req GET /)
   expect "step 12 GET /" 200 "$status"
@@ -350,17 +372,29 @@ fi
 rm -f "$jar"
 status=$(req GET /sign-in)
 token=$(csrf "step 7")
-status=$(req POST /setup --data-urlencode "csrf=$token" --data-urlencode "code=$code")
+form_token_args
+status=$(req POST /setup --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "code=$code")
 expect "step 7 reused code" 404 "$status"
 ok "7 POST /setup reused code 404"
 
 # 8. Sign-in.
-status=$(sign_in "x${password}" "step 8 wrong")
+sign_in "x${password}" "step 8 wrong"
 expect "step 8 wrong password" 401 "$status"
 ok "8 POST /sign-in wrong password 401"
-status=$(sign_in "$password" "step 8")
+sign_in "$password" "step 8"
 expect "step 8 sign-in" 303 "$status"
 ok "8 POST /sign-in 303"
+
+# 8b. Replay: the identical sign-in POST again, with the spent form token.
+if ((${#ftok[@]} > 0)); then
+  status=$(req POST /sign-in "${sign_in_args[@]}")
+  expect "step 8b sign-in replay" 409 "$status"
+  grep -qF "Already submitted" "$body" || fail "step 8b: page lacks Already submitted"
+  ok "8b POST /sign-in replay 409 Already submitted"
+else
+  ok "8b replay check skipped: console without form_token"
+fi
+sign_in_args=()
 status=$(req GET /)
 expect "step 8 GET /" 200 "$status"
 grep -qF "Signed in as" "$body" || fail "step 8: landing page lacks Signed in as"
@@ -382,7 +416,7 @@ rm -f "$jar"
 status=$(req GET /setup)
 expect "step 9 GET /setup" 404 "$status"
 ok "9 GET /setup 404"
-status=$(sign_in "$password" "step 9")
+sign_in "$password" "step 9"
 expect "step 9 sign-in" 303 "$status"
 ok "9 POST /sign-in 303"
 
