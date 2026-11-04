@@ -231,7 +231,7 @@ describe("pulse down", () => {
     expect(await runDown(d, true, c.deps)).toBe(0);
     expect(subcommands(c)).toEqual(["down -v"]);
     expect(c.out).toEqual([
-      "deleted the volumes of project pulse-demo (database, notify ledger, runtime secrets)",
+      "deleted the volumes of project pulse-demo (database, notify ledger, console database, runtime secrets)",
     ]);
   });
 });

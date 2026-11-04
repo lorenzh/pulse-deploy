@@ -273,8 +273,8 @@ describe("pulse init prompts", () => {
       expect(doc.installId).toMatch(/^[0-9a-f]{32}$/);
       expect(Number.isNaN(Date.parse(doc.createdAt))).toBe(false);
       const compose = all.get("compose.yaml")?.content ?? "";
-      // Five top-level volumes (api-data, notify-data, api-, probe-default- and console-secrets), each labelled.
-      expect(compose.split(doc.installId).length - 1).toBe(5);
+      // Six top-level volumes (api-data, notify-data, console-data, api-, probe-default- and console-secrets), each labelled.
+      expect(compose.split(doc.installId).length - 1).toBe(6);
       const out = new Map<string, { mode: string; content: string }>();
       for (const [path, entry] of all) {
         if (path.startsWith("secrets/")) {

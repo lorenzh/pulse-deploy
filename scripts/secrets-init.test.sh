@@ -127,6 +127,64 @@ run_init - "$out" PULSE_SECRETS_MODE=generate >/dev/null
 n=$((n + 1))
 echo "ok: generate mode writes eu and us tokens and keeps them on a rerun"
 
+# Generate mode with PULSE_SECRETS_ADMIN=on: one admin token in both files, kept on a rerun.
+new_volume out
+msg=$(run_init - "$out" PULSE_SECRETS_MODE=generate PULSE_SECRETS_ADMIN=on MAKE_CONSOLE=1 2>&1) ||
+  fail "generate admin: secrets-init failed"
+gen_admin=$(out_cmd "$out" 'cat /out/console/admin-token')
+[[ "$gen_admin" =~ ^[0-9a-f]{64}$ ]] || fail "generate admin: admin-token is not 64 hex characters"
+grep -qF -- "$gen_admin" <<<"$msg" && fail "generate admin: the output shows the token"
+out_cmd "$out" 'cat /out/api/admin-tokens.json' |
+  jq -e --arg t "$gen_admin" '. == {"tokens": [{"name": "admin", "token": $t}]}' >/dev/null ||
+  fail "generate admin: admin-tokens.json does not hold the console token"
+out_cmd "$out" 'cat /out/api/tokens.json' | jq -e --arg t "$gen_admin" 'all(.tokens[]; .token != $t)' >/dev/null ||
+  fail "generate admin: the admin token equals a probe token"
+[[ "$(out_cmd "$out" 'stat -c "%u:%g %a" /out/api/admin-tokens.json /out/console/admin-token | sort -u')" == "1000:1000 400" ]] ||
+  fail "generate admin: owner or mode is not 1000:1000 400"
+gen_hash=$(printf '%s' "$gen_admin" | sha256sum)
+run_init - "$out" PULSE_SECRETS_MODE=generate PULSE_SECRETS_ADMIN=on MAKE_CONSOLE=1 >/dev/null 2>&1 ||
+  fail "generate admin: the rerun failed"
+[[ "$(out_cmd "$out" 'cat /out/console/admin-token' | sha256sum)" == "$gen_hash" ]] ||
+  fail "generate admin: a rerun changed the admin token"
+[[ "$(out_cmd "$out" 'cat /out/api/admin-tokens.json' | grep -c -F -- "$gen_admin")" == "1" ]] ||
+  fail "generate admin: a rerun changed admin-tokens.json"
+n=$((n + 1))
+echo "ok: generate mode with admin writes matching 1000:1000 0400 files and keeps the token"
+
+# Generate mode with admin: an existing console token of at least 32 valid characters stays,
+# a short or invalid one is replaced. <name> <printf content> <kept: 1|0>.
+for c in "32 characters|0123456789abcdef0123456789abcdef|1" "31 characters|0123456789abcdef0123456789abcde|0" \
+  "a space|0123456789abcdef 0123456789abcdef|0" "the placeholder|replace-with-0123456789abcdef0123456789|0"; do
+  IFS='|' read -r name content kept <<<"$c"
+  new_volume out
+  docker run --pull never --rm --network none --user 0:0 -v "$out:/out" -e C="$content" --entrypoint sh "$image" -c \
+    'mkdir -p /out/console && printf "%s\n" "$C" >/out/console/admin-token'
+  run_init - "$out" PULSE_SECRETS_MODE=generate PULSE_SECRETS_ADMIN=on MAKE_CONSOLE=1 >"$work/msg" 2>&1 ||
+    fail "generate admin ($name): secrets-init failed"
+  got=$(out_cmd "$out" 'cat /out/console/admin-token')
+  grep -qF -- "$got" "$work/msg" && fail "generate admin ($name): the output shows the token"
+  if [[ "$kept" == 1 ]]; then
+    [[ "$got" == "$content" ]] || fail "generate admin ($name): a valid token was replaced"
+  else
+    [[ "$got" =~ ^[0-9a-f]{64}$ && "$got" != "$content" ]] || fail "generate admin ($name): an invalid token was kept"
+  fi
+  out_cmd "$out" 'cat /out/api/admin-tokens.json' | jq -e --arg t "$got" '.tokens == [{"name": "admin", "token": $t}]' >/dev/null ||
+    fail "generate admin ($name): admin-tokens.json differs from the console token"
+  n=$((n + 1))
+  echo "ok: generate admin with an existing token of ${name}: kept=${kept}"
+done
+
+# Generate mode with admin but no /out/console: refused before any write, with the literal text.
+new_volume out
+code=0
+msg=$(run_init - "$out" PULSE_SECRETS_MODE=generate PULSE_SECRETS_ADMIN=on 2>&1) || code=$?
+((code == 1)) || fail "generate admin without /out/console: exit ${code}, expected 1"
+[[ "$msg" == "secrets-init: PULSE_SECRETS_ADMIN: generate mode needs /out/console" ]] ||
+  fail "generate admin without /out/console: unexpected message"
+[[ -z "$(out_cmd "$out" 'find /out -type f')" ]] || fail "generate admin without /out/console: wrote a file"
+n=$((n + 1))
+echo "ok: generate admin without /out/console exits 1 with the literal message and writes nothing"
+
 # Multi-location and admin inputs: <name> then <file>=<content> pairs, each file mode 0600.
 multi_input() {
   local dir="$work/$1" pair

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# init-secrets.sh [--dir <dir>]: create the host secrets directory (mode 0700) and a random
-# probe token in <dir>/probe-token (mode 0600). An existing token is never overwritten.
+# init-secrets.sh [--dir <dir>]: create the host secrets directory (mode 0700) and two random
+# tokens, each mode 0600: the probe token <dir>/probe-token and the console admin token
+# <dir>/admin-token. Each is created on its own; an existing token is never overwritten.
 # Default directory: secrets/ at the repository root. Prints the path, never the value.
 set -euo pipefail
 
@@ -26,18 +27,27 @@ done
 umask 077
 mkdir -p "$dir"
 chmod 700 "$dir"
-file="$dir/probe-token"
-if [[ -e "$file" || -L "$file" ]]; then
-  echo "init-secrets: $file exists, kept"
-  exit 0
-fi
-# mktemp creates a new file with a random name and O_EXCL, so it never follows a
-# planted symlink.
-tmp="$(mktemp "$dir/.probe-token.XXXXXXXXXX")"
+tmp=""
 trap 'rm -f "$tmp"' EXIT
-# 32 random bytes as 64 hex characters.
-od -An -N32 -tx1 /dev/urandom | tr -d ' \n' | head -c 64 >"$tmp"
-printf '\n' >>"$tmp"
-chmod 600 "$tmp"
-mv -n "$tmp" "$file"
-echo "init-secrets: wrote $file"
+
+# make_token <name>: write a random token to <dir>/<name> unless it exists.
+make_token() {
+  local file="$dir/$1"
+  if [[ -e "$file" || -L "$file" ]]; then
+    echo "init-secrets: $file exists, kept"
+    return 0
+  fi
+  # mktemp creates a new file with a random name and O_EXCL, so it never follows a
+  # planted symlink.
+  tmp="$(mktemp "$dir/.$1.XXXXXXXXXX")"
+  # 32 random bytes as 64 hex characters.
+  od -An -N32 -tx1 /dev/urandom | tr -d ' \n' | head -c 64 >"$tmp"
+  printf '\n' >>"$tmp"
+  chmod 600 "$tmp"
+  mv -n "$tmp" "$file"
+  tmp=""
+  echo "init-secrets: wrote $file"
+}
+
+make_token probe-token
+make_token admin-token

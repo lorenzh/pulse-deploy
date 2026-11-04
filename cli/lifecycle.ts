@@ -158,7 +158,7 @@ export async function runDown(dir: string, volumes: boolean, deps: DockerDeps): 
   }
   if (volumes)
     deps.out(
-      `deleted the volumes of project ${install.project} (database, notify ledger, runtime secrets)`,
+      `deleted the volumes of project ${install.project} (database, notify ledger, console database, runtime secrets)`,
     );
   return 0;
 }

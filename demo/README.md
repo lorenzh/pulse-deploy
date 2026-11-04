@@ -12,7 +12,7 @@ Open the status page on http://127.0.0.1:8080, the console on http://127.0.0.1:8
 
 | Service        | Image                          | Port                                            | Role                                                                                           |
 | -------------- | ------------------------------ | ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `secrets-init` | `oven/bun`                     | none, no network                                | Generates one random 64-hex token per location (`eu`, `us`); keeps them on a rerun.           |
+| `secrets-init` | `oven/bun`                     | none, no network                                | Generates one random 64-hex token per location (`eu`, `us`) and the console admin token; keeps them on a rerun. |
 | `demo-init`    | `oven/bun`                     | none, no network                                | Writes the checks (`init.mjs`) to the volume `demo-config`, with maintenance windows relative to the start. |
 | `demo-targets` | `oven/bun`                     | none                                            | HTTP targets driven by the time since its start (`targets.mjs`).                              |
 | `demo-tls`     | `alpine/openssl`               | none                                            | HTTPS on 8443 with a self-signed certificate valid for 5 days (`tls.sh`).                     |
@@ -21,7 +21,7 @@ Open the status page on http://127.0.0.1:8080, the console on http://127.0.0.1:8
 | `probe-eu`, `probe-us` | `ghcr.io/lorenzh/pulse-probe` | none                                  | Two locations.                                                                                |
 | `status`       | `ghcr.io/lorenzh/pulse-status` | `127.0.0.1:${PULSE_STATUS_PORT:-8080}` → 8080   | `PULSE_STATUS_SHOW_CHECKS=true`: the checks list with the latency chart.                      |
 | `notify`       | `ghcr.io/lorenzh/pulse-notify` | none                                            | `notify.json`: a file channel and an email channel to mailpit.                                |
-| `console`      | `ghcr.io/lorenzh/pulse-console`| `127.0.0.1:${PULSE_CONSOLE_PORT:-8082}` → 8082  | Admin UI.                                                                                     |
+| `console`      | `ghcr.io/lorenzh/pulse-console`| `127.0.0.1:${PULSE_CONSOLE_PORT:-8082}` → 8082  | Admin UI; accounts in `console-data`.                                                         |
 
 All images are pinned in `common/services.yaml`. The project is `pulse-demo` with its own volumes, so it never touches `full`'s database. It uses the same host ports as `full`, so stop `full` first.
 
@@ -63,14 +63,25 @@ services:
       - ./theme-white-label.json:/config/theme.json:ro
 ```
 
+## Console: first-run setup and sign-in
+
+The console keeps its local accounts and sessions in the volume `console-data` (`/data`). It reads the admin token from `console-secrets` (`/run/pulse/admin-token`), which `secrets-init` copies from `secrets/admin-token`. The api gets the same token in `/run/pulse/admin-tokens.json` and imports it once.
+
+- First run: the console prints a one-time setup code to its log. Read it with `docker compose -f demo/compose.yaml logs console | grep 'setup code'`, open `/setup`, enter the code and create the owner account. Then sign in at `/sign-in`.
+- TLS reverse proxy: set `PULSE_CONSOLE_PUBLIC_URL` to the public origin (for example `https://console.example.com`) in `demo/.env`. Empty means loopback mode on `http://127.0.0.1:${PULSE_CONSOLE_PORT}`.
+- Reset the console (destructive: deletes every console account and session): `docker compose -f demo/compose.yaml stop console`, `docker compose -f demo/compose.yaml rm -f console`, `docker volume rm pulse-demo_console-data`, then `up -d`. A new setup code appears.
+
+The pinned console `0.1.0` has no setup flow; `demo` gets it with the next console pin bump.
+
 ## Variables
 
-The demo needs no `.env`. Copy `.env.example` to `demo/.env` only to change a port.
+The demo needs no `.env`. Copy `.env.example` to `demo/.env` only to change a port or the console URL.
 
 | Variable             | Default | Meaning                                         |
 | -------------------- | ------- | ----------------------------------------------- |
 | `PULSE_STATUS_PORT`  | `8080`  | Host port of the status page, on `127.0.0.1`.   |
 | `PULSE_CONSOLE_PORT` | `8082`  | Host port of the console, on `127.0.0.1`.       |
+| `PULSE_CONSOLE_PUBLIC_URL` | empty | Public origin of the console behind a TLS reverse proxy. Empty: loopback mode. |
 | `PULSE_MAILPIT_PORT` | `8025`  | Host port of the mailpit UI and API, on `127.0.0.1`. |
 
 ## Stop and reset

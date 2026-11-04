@@ -212,8 +212,11 @@ function optional(common: Common, answers: Model): YamlMap {
     const base = pulseBase(common, "console", answers);
     out.console = {
       ...base,
-      environment: env(base, { PULSE_CONSOLE_ADMIN_TOKEN_FILE: "/run/pulse/admin-token" }),
-      volumes: ["console-secrets:/run/pulse:ro"],
+      environment: env(base, {
+        PULSE_CONSOLE_ADMIN_TOKEN_FILE: "/run/pulse/admin-token",
+        PULSE_CONSOLE_PUBLIC_URL: new Ref(`\${PULSE_CONSOLE_PUBLIC_URL:-}`),
+      }),
+      volumes: ["console-secrets:/run/pulse:ro", "console-data:/data"],
       ports: [port("PULSE_CONSOLE_PORT", answers.ports.console ?? 8082, 8082, true)],
       depends_on: { "secrets-init": completed, api: healthy },
     };
@@ -225,6 +228,7 @@ function optional(common: Common, answers: Model): YamlMap {
 export function volumeKeys(answers: Model): string[] {
   const keys = ["api-data"];
   if (answers.notify) keys.push("notify-data");
+  if (answers.console) keys.push("console-data");
   keys.push("api-secrets", ...answers.locations.map((loc) => `probe-${loc}-secrets`));
   if (answers.console) keys.push("console-secrets");
   return keys;

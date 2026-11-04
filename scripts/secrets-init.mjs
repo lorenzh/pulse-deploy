@@ -5,6 +5,8 @@
 // PULSE_SECRETS_ADMIN=on it also reads /in/admin-token and writes /out/api/admin-tokens.json and,
 // when /out/console exists, /out/console/admin-token. Generate mode (PULSE_SECRETS_MODE=generate, the demo): keeps or
 // creates one random token per location in PULSE_DEMO_LOCATIONS and writes /out/api/tokens.json.
+// With PULSE_SECRETS_ADMIN=on it also keeps /out/console/admin-token (valid, at least 32
+// characters) or creates one, and writes it to /out/api/admin-tokens.json; it needs /out/console.
 // Every output file is owned by 1000:1000 (the container user bun) with mode 0400 and is
 // written through a temp file and a rename. No message ever holds a token.
 import { chmodSync, chownSync, closeSync, lstatSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
@@ -109,7 +111,7 @@ function filesMode(env) {
   if (admin) {
     const token = readHostToken("/in/admin-token");
     if (entries.some((e) => e.token === token)) fail("/in/admin-token", "must differ from every probe token");
-    writes.push(["/out/api/admin-tokens.json", `${JSON.stringify({ tokens: [{ name: "admin", token }] })}\n`]);
+    writes.push(["/out/api/admin-tokens.json", adminJson(token)]);
     if (isDirectory("/out/console")) writes.push(["/out/console/admin-token", token]);
   }
   writeSecret("/out/api/tokens.json", tokensJson(entries));
@@ -132,7 +134,13 @@ function randomToken() {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function adminJson(token) {
+  return `${JSON.stringify({ tokens: [{ name: "admin", token }] })}\n`;
+}
+
 function generateMode(env) {
+  const admin = adminEnabled(env);
+  if (admin && !isDirectory("/out/console")) fail("PULSE_SECRETS_ADMIN", "generate mode needs /out/console");
   const locations = (env.PULSE_DEMO_LOCATIONS || "eu,us").split(",").map((l) => l.trim());
   const entries = [];
   for (const location of locations) {
@@ -146,6 +154,13 @@ function generateMode(env) {
     entries.push({ location, token });
   }
   writeSecret("/out/api/tokens.json", tokensJson(entries));
+  if (admin) {
+    const file = "/out/console/admin-token";
+    let token = existingToken(file);
+    if (token === undefined || token.length < 32 || entries.some((e) => e.token === token)) token = randomToken();
+    writeSecret("/out/api/admin-tokens.json", adminJson(token));
+    writeSecret(file, token);
+  }
 }
 
 try {

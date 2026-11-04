@@ -1,7 +1,7 @@
 // The complete file map of an install (decisions 5 and 16), rendered in memory before any write.
 // Pure: `now`, the install id and the CLI version come in as inputs. Token files are not part of
 // the map: cli/tokens.ts generates them.
-import type { Answers } from "./answers.ts";
+import { type Answers, validateConsoleUrl } from "./answers.ts";
 import { UsageError } from "./args.ts";
 import { renderChecks } from "./render-checks.ts";
 import { renderCompose, serviceList } from "./render-compose.ts";
@@ -45,6 +45,8 @@ function envEntries(answers: Answers): [string, string][] {
   if (ports.status !== undefined) out.push(["PULSE_STATUS_PORT", String(ports.status)]);
   if (urls.status !== undefined) out.push(["PULSE_STATUS_PUBLIC_URL", urls.status]);
   if (ports.console !== undefined) out.push(["PULSE_CONSOLE_PORT", String(ports.console)]);
+  if (urls.console !== undefined)
+    out.push(["PULSE_CONSOLE_PUBLIC_URL", validateConsoleUrl("--console-url", urls.console)]);
   if (ports.mailpit !== undefined) out.push(["PULSE_MAILPIT_PORT", String(ports.mailpit)]);
   if (answers.srcDir !== undefined) out.push(["PULSE_SRC_DIR", answers.srcDir]);
   return out;

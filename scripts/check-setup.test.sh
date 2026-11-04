@@ -83,17 +83,17 @@ expect_fail "a copy of the api pin as image in demo" 3 \
 expect_fail "a copy of the api pin anywhere in demo" 4 \
   "line=\$(grep -oE '${pin}' common/services.yaml); printf '# %s\\n' \"\$line\" >>demo/compose.yaml"
 expect_fail "an admin token config inside /run/pulse" 8 \
-  "sed -i 's#target: /run/pulse-admin/admin-tokens.json#target: /run/pulse/admin-tokens.json#' e2e/compose.e2e.yaml"
-expect_fail "a service-level tmpfs at /run/pulse on console in full" 8 \
-  "sed -i '/service: console }/a\\    tmpfs: [\"/run/pulse\"]' full/compose.yaml"
+  "sed -i '/^  api:\$/a\\    configs: [{ source: admin-tokens, target: /run/pulse/admin-tokens.json }]' e2e/compose.e2e.yaml; printf 'configs:\\n  admin-tokens:\\n    content: \"[]\"\\n' >>e2e/compose.e2e.yaml"
+expect_fail "a service-level tmpfs at /run/pulse on status in full" 8 \
+  "sed -i '/service: status }/a\\    tmpfs: [\"/run/pulse\"]' full/compose.yaml"
 expect_fail "a service-level tmpfs below /run/pulse with options in full" 8 \
-  "sed -i '/service: console }/a\\    tmpfs: \"/run/pulse/x:size=1m\"' full/compose.yaml"
-expect_fail "a tmpfs at /run//pulse on console in full" 8 \
-  "sed -i '/service: console }/a\\    tmpfs: [\"/run//pulse\"]' full/compose.yaml"
-expect_fail "a tmpfs at /tmp/../run/./pulse/ on console in full" 8 \
-  "sed -i '/service: console }/a\\    tmpfs: [\"/tmp/../run/./pulse/\"]' full/compose.yaml"
-expect_fail "a tmpfs at /var/run/pulse on console in full" 8 \
-  "sed -i '/service: console }/a\\    tmpfs: [\"/var/run/pulse\"]' full/compose.yaml"
+  "sed -i '/service: status }/a\\    tmpfs: \"/run/pulse/x:size=1m\"' full/compose.yaml"
+expect_fail "a tmpfs at /run//pulse on status in full" 8 \
+  "sed -i '/service: status }/a\\    tmpfs: [\"/run//pulse\"]' full/compose.yaml"
+expect_fail "a tmpfs at /tmp/../run/./pulse/ on status in full" 8 \
+  "sed -i '/service: status }/a\\    tmpfs: [\"/tmp/../run/./pulse/\"]' full/compose.yaml"
+expect_fail "a tmpfs at /var/run/pulse on status in full" 8 \
+  "sed -i '/service: status }/a\\    tmpfs: [\"/var/run/pulse\"]' full/compose.yaml"
 expect_fail "a tmpfs at /var/run//pulse/x on api in full" 8 \
   "sed -i '/service: api }/a\\    tmpfs: [\"/var/run//pulse/x\"]' full/compose.yaml"
 expect_fail "secrets/ not ignored" 6 \
@@ -119,6 +119,12 @@ expect_fail "a committed override that publishes the api in full" 11 \
    && git add -f full/compose.override.yaml"
 expect_fail "a docker-compose.override.yml in e2e" 11 \
   "printf 'services: {}\\n' >e2e/docker-compose.override.yml"
+expect_fail "init-secrets.sh without an admin token" 7 \
+  "sed -i '/^make_token admin-token\$/d' scripts/init-secrets.sh"
+expect_fail "init-secrets.sh with a short admin token" 7 \
+  "sed -i 's/^make_token admin-token\$/make_token admin-token; head -c 32 \"\$dir\/probe-token\" >\"\$dir\/admin-token\"/' scripts/init-secrets.sh"
+expect_fail "init-secrets.sh that rewrites the admin token" 7 \
+  "sed -i 's/^make_token admin-token\$/rm -f \"\$dir\/admin-token\"; make_token admin-token/' scripts/init-secrets.sh"
 expect_pass "a local, gitignored override in full" \
   "printf 'services: {}\\n' >full/compose.override.yaml"
 expect_pass "a valid bump that changes only common/services.yaml" \

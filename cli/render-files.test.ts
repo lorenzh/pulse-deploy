@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveAnswers } from "./answers.ts";
+import { resolveAnswers, validateConsoleUrl } from "./answers.ts";
 import { parseCommand, UsageError } from "./args.ts";
 import { DIRECTORIES, renderEnv, renderFiles } from "./render-files.ts";
 import { loadCommon } from "./services.ts";
@@ -127,9 +127,30 @@ describe("renderFiles", () => {
         "PULSE_STATUS_PORT='8080'",
         "PULSE_STATUS_PUBLIC_URL='http://localhost:8080'",
         "PULSE_CONSOLE_PORT='8082'",
+        "PULSE_CONSOLE_PUBLIC_URL='http://127.0.0.1:8082'",
         "PULSE_SRC_DIR='/src/pulse'",
         "",
       ].join("\n"),
+    );
+    expect(
+      content(files("--setup", "full", "--console-url", "https://console.example.com"), ".env"),
+    ).toContain("PULSE_CONSOLE_PUBLIC_URL='https://console.example.com'\n");
+    // The console needs an origin: every console URL site refuses a path other than /.
+    for (const bad of [
+      "https://console.example.com/pulse",
+      "https://console.example.com//",
+      "http://console.example/a/",
+    ]) {
+      expect(() => files("--setup", "full", "--console-url", bad)).toThrow(
+        "--console-url: must not have a path other than /",
+      );
+      expect(() => validateConsoleUrl("--console-url", bad)).toThrow(UsageError);
+    }
+    expect(
+      content(files("--setup", "full", "--console-url", "https://c.example/"), ".env"),
+    ).toContain("PULSE_CONSOLE_PUBLIC_URL='https://c.example/'\n");
+    expect(content(files("--setup", "full", "--no-console"), ".env")).not.toContain(
+      "PULSE_CONSOLE",
     );
     expect(renderEnv([["A", "x $y"]])).toContain("A='x $y'\n");
     for (const bad of ["it's", "a\nb", "a\0b", "a\rb"]) {

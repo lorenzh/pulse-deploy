@@ -141,6 +141,13 @@ export function validatePublicUrl(flag: string, value: string): string {
   return value;
 }
 
+/** A console public URL: a public URL that is an origin, with no path other than /. */
+export function validateConsoleUrl(flag: string, value: string): string {
+  validatePublicUrl(flag, value);
+  if (new URL(value).pathname !== "/") return refuse(`${flag}: must not have a path other than /`);
+  return value;
+}
+
 /** A webhook URL (decision 9): http(s), no user info, no query string. */
 export function validateWebhookUrl(value: string): string {
   const url = parseUrl("--webhook-url", value);
@@ -583,7 +590,7 @@ function publicUrls(flags: InitFlags, ports: Answers["ports"]): Answers["urls"] 
     urls.console =
       flags.consoleUrl === undefined
         ? `http://127.0.0.1:${ports.console}`
-        : validatePublicUrl("--console-url", flags.consoleUrl);
+        : validateConsoleUrl("--console-url", flags.consoleUrl);
   }
   return urls;
 }

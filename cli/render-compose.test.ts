@@ -141,6 +141,7 @@ describe("renderCompose", () => {
     }
     expect(svc(render("--setup", "full"), "console").volumes).toEqual([
       "console-secrets:/run/pulse:ro",
+      "console-data:/data",
     ]);
     expect(svc(render("--setup", "demo"), "probe-eu").volumes).toEqual([
       "probe-eu-secrets:/run/pulse:ro",
@@ -188,6 +189,21 @@ describe("renderCompose", () => {
     expect(svc(doc, "console").environment?.PULSE_CONSOLE_ADMIN_TOKEN_FILE).toBe(
       "/run/pulse/admin-token",
     );
+    expect(svc(doc, "console").environment?.PULSE_CONSOLE_PUBLIC_URL).toBe(
+      "${PULSE_CONSOLE_PUBLIC_URL:-}",
+    );
+  });
+
+  test("console-data is declared and labeled only with the console", () => {
+    const on = render("--setup", "full");
+    expect(Object.keys(on.volumes)).toContain("console-data");
+    expect(on.volumes["console-data"]).toEqual({ labels: expect.any(Object) });
+    for (const args of [
+      ["--setup", "full", "--no-console"],
+      ["--setup", "minimal"],
+    ]) {
+      expect(Object.keys(render(...args).volumes)).not.toContain("console-data");
+    }
   });
 
   test("notify lists the secret env names as bare keys with no value", () => {
@@ -240,6 +256,7 @@ describe("renderCompose", () => {
     expect(Object.keys(render("--setup", "demo").volumes)).toEqual([
       "api-data",
       "notify-data",
+      "console-data",
       "api-secrets",
       "probe-eu-secrets",
       "probe-us-secrets",
