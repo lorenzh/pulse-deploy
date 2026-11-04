@@ -88,7 +88,11 @@ export interface FakeOpts {
   /** Called for each readiness exec; may advance the clock. */
   onExec?: (svc: string, opts: RunOptions) => void;
   upCode?: number;
+  /** Makes one call fail with code 1 and this stderr; other calls keep their default. */
+  fail?: { call: FailCall; stderr: string };
 }
+
+export type FailCall = "version" | "config" | "ps" | "volume ls" | "volume inspect";
 
 export interface Call {
   argv: string[];
@@ -120,12 +124,22 @@ function cmdOf(argv: string[]): string {
 
 type Handler = (argv: string[], opts: RunOptions) => RunResult | undefined;
 
+/** The injected failure of a plain docker call, if it names this call. */
+function failure(o: FakeOpts, argv: string[]): RunResult | undefined {
+  if (o.fail === undefined) return undefined;
+  const sub = argv[2] === "ls" ? "ls" : "inspect";
+  const call = argv[1] === "volume" ? `volume ${sub}` : argv[1];
+  return o.fail.call === call ? { code: 1, stdout: "", stderr: o.fail.stderr } : undefined;
+}
+
 /** Plain docker calls: version, ps, volume ls and volume inspect. */
 function dockerHandler(
   o: FakeOpts,
   volumes: Record<string, Record<string, string> | null>,
 ): Handler {
   return (argv) => {
+    const f = failure(o, argv);
+    if (f !== undefined) return f;
     if (argv[1] === "version")
       return o.serverFails === true
         ? { code: 1, stdout: "", stderr: "Cannot connect to the Docker daemon\nmore" }
@@ -154,6 +168,8 @@ function composeHandler(o: FakeOpts, project: string, services: FakeService[]): 
         ? { code: 1, stdout: "", stderr: "unknown command" }
         : ok(`${o.composeVersion ?? "2.38.2"}\n`);
     const cmd = cmdOf(argv);
+    if (cmd === "config" && o.fail?.call === "config")
+      return { code: 1, stdout: "", stderr: o.fail.stderr };
     if (cmd === "config") return ok(JSON.stringify(o.config ?? goodConfig(project, services)));
     if (cmd === "up") return { code: o.upCode ?? 0, stdout: "", stderr: "" };
     if (cmd === "down") return ok();

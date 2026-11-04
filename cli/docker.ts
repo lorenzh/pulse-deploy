@@ -96,8 +96,21 @@ export const realSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
     );
   });
 
+/**
+ * Replaces every URL user info (username, password or both) in a line with "(hidden)".
+ * A scheme with ":/" or "://" starts a URL; the user info runs to the last "@" before
+ * whitespace, "/", "?" or "#". The replacement is fixed, so no credential reaches it.
+ */
+export function maskUserInfo(line: string): string {
+  return line.replace(
+    /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:\/\/?)[^\s/?#]+@/g,
+    "$1(hidden)@",
+  );
+}
+
+/** The first nonblank line of a stderr text, with URL user info masked. */
 export function firstLine(text: string): string {
-  return text.split("\n").find((l) => l.trim() !== "") ?? "";
+  return maskUserInfo(text.split("\n").find((l) => l.trim() !== "") ?? "");
 }
 
 /** The child environment: the CLI's environment minus every COMPOSE_* variable. */
