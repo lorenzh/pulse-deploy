@@ -220,6 +220,9 @@ jobs:
         run: docker compose -f dev/compose.yaml up -d --build
       - working-directory: pulse-deploy
         run: scripts/wait-ready.sh dev/compose.yaml 900
+      - name: Console setup, sign-in and recreation
+        working-directory: pulse-deploy
+        run: bash e2e/console-setup.sh dev/compose.yaml
       - name: Stack state and logs
         if: failure()
         working-directory: pulse-deploy

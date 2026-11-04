@@ -125,6 +125,8 @@ scripts/bump-images.sh --check-latest          # fails when a higher x.y.z relea
 
 `bash e2e/compose-e2e.sh` tests `full` on the published images, with the test-only overlay `e2e/compose.e2e.yaml` (api on loopback, an e2e target). It writes a throwaway admin token to `e2e/.secrets/admin-token` before `init-secrets.sh`, so the api and the console share it. It uses its own project `pulse-e2e` and its own throwaway secrets in `e2e/.secrets/`, and ends with `==> All checks passed`. It needs ports 3000, 8080 and 8082 free, curl and jq, and takes about 4 minutes. Timeouts can be raised with `E2E_TIMEOUT_*` variables (see the top of the script).
 
+`bash e2e/console-setup.sh dev/compose.yaml` tests the console first-run setup on a running `dev` stack with fresh volumes, after `scripts/wait-ready.sh`. It reads the setup code from the console log, creates the owner `e2e-owner@example.com` with a random password, tests the api connection, signs in, recreates the console, and checks that the setup is closed and the account stays. Last, it scans the console database files for the admin token and expects no match. It prints only `ok:` lines, never a token, code or password. It needs curl and jq. The CI `dev` job runs it before teardown. A second run on the same volumes fails at step 1, because the console prints no new code once the owner exists. It needs a console with the setup flow, so it does not run against `full` until the console pin bump.
+
 ## Checks
 
 See [AGENTS.md](AGENTS.md) for the commands that CI runs.

@@ -54,6 +54,8 @@ The console keeps its local accounts and sessions in the volume `console-data` (
 
 An existing dev install: run `scripts/init-secrets.sh` once more; it keeps `probe-token` and adds `admin-token`.
 
+Test the flow: with fresh volumes, after `scripts/wait-ready.sh dev/compose.yaml 900`, run `bash e2e/console-setup.sh dev/compose.yaml`. It does the setup itself, so it fails when an owner already exists. See [README.md](../README.md#end-to-end-test).
+
 ## Variables
 
 Copy `.env.example` to `dev/.env` and uncomment a line to change it.
