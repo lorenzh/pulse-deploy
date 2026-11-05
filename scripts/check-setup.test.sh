@@ -60,6 +60,11 @@ expect_fail "console on all interfaces in full" 5 \
   "sed -i 's/\"127.0.0.1:\${PULSE_CONSOLE_PORT:-8082}:8082\"/\"\${PULSE_CONSOLE_PORT:-8082}:8082\"/' full/compose.yaml"
 expect_fail "mailpit published in full" 5 \
   "sed -i '/^services:/a\\  mailpit:\\n    extends: { file: ../common/services.yaml, service: mailpit }\\n    ports: [\"127.0.0.1:8025:8025\"]' full/compose.yaml"
+# Only the dev base with the e2e overlay reads dev/.env for E2E_DEV_API_PORT: dev alone and full
+# with the overlay keep their ports, so only the e2e-dev row of rule 5 can catch this.
+expect_fail "another api port in dev with the e2e overlay" 5 \
+  "sed -i 's/\"127.0.0.1:\${PULSE_API_PORT:-3000}:3000\"/\"127.0.0.1:\${E2E_DEV_API_PORT:-3000}:3000\"/' e2e/compose.e2e.yaml \
+   && printf 'E2E_DEV_API_PORT=3001\\n' >dev/.env"
 expect_fail "an api image without a digest" 2 \
   "sed -i -E 's#(ghcr\\.io/lorenzh/pulse-api:[0-9.]+)@sha256:[0-9a-f]{64}#\\1#' common/services.yaml"
 expect_fail "an api image without a version" 2 \

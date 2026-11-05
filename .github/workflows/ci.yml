@@ -247,6 +247,63 @@ jobs:
           PULSE_SRC_DIR: ${{ github.workspace }}
         run: bash cli/test/stack.sh dev
 
+  e2e-dev:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pulse-deploy
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-api
+          ref: main
+          path: pulse-api
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-probe
+          ref: main
+          path: pulse-probe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-status
+          ref: main
+          path: pulse-status
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-notify
+          ref: main
+          path: pulse-notify
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-console
+          ref: main
+          path: pulse-console
+          persist-credentials: false
+      - name: Revisions of the service checkouts
+        run: |
+          for svc in api probe status notify console; do
+            echo "pulse-${svc} $(git -C "pulse-${svc}" rev-parse HEAD)"
+          done
+      - working-directory: pulse-deploy
+        run: scripts/init-secrets.sh
+      - name: End-to-end test on dev (build and test)
+        working-directory: pulse-deploy
+        timeout-minutes: 60
+        run: |
+          set -o pipefail
+          E2E_SETUP=dev bash e2e/compose-e2e.sh | tee e2e-dev.log
+          grep -qx 'ok: manual incident privacy' e2e-dev.log
+      - name: Teardown
+        if: always()
+        working-directory: pulse-deploy
+        run: docker compose -p pulse-e2e -f dev/compose.yaml -f e2e/compose.e2e.yaml down -v --remove-orphans
+
   pins-latest:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-24.04
