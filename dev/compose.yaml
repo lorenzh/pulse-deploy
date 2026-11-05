@@ -93,6 +93,10 @@ services:
       PULSE_CONSOLE_SECRET_KEY_FILE: /run/pulse/secret-key
       # The public origin behind a TLS reverse proxy; empty means loopback mode.
       PULSE_CONSOLE_PUBLIC_URL: ${PULSE_CONSOLE_PUBLIC_URL:-}
+      # Prefills of the probe locations screen: the dev api, probe tag and network.
+      PULSE_CONSOLE_PROBE_API_URL: http://api:3000
+      PULSE_CONSOLE_PROBE_IMAGE: pulse-probe:dev
+      PULSE_CONSOLE_PROBE_NETWORK: pulse-dev_default
     volumes:
       - console-secrets:/run/pulse:ro
       - console-data:/data
