@@ -3,7 +3,8 @@
 # Usage: bash e2e/console-setup.sh <compose file>   (CI: dev/compose.yaml, after wait-ready)
 # Needs a fresh console-data volume, curl, jq and a console image with the setup flow.
 # Prints only "ok:" lines. It never prints a token, the setup code, the password, the setup key,
-# a TOTP code or a recovery code.
+# a TOTP code or a recovery code. Each POST sends the form_token of the form whose action is exactly
+# the path of that POST, or none when that form has no form_token.
 # E2E_CONSOLE_FLOW: auto (default), legacy or two-factor. auto picks the flow from the Location
 # of Finish setup: /sign-in?setup=done is legacy, /account/authenticator is two-factor.
 set -euo pipefail
@@ -62,13 +63,27 @@ csrf() {
   [[ -n "$v" ]] || fail "$1: no csrf field"
   printf '%s' "$v"
 }
-# form_token_args: sets the array ftok to the form_token field of the last body, or to nothing.
+# form_token_args <path>: sets the array ftok to the form_token field of the first form in the last
+# body whose action is exactly <path>, or to nothing. It resets ftok first, so a token of an earlier
+# page never survives. It reads only that form, never another form's token, and prints nothing.
 # Console versions without form tokens get no extra field, so the POST stays as before.
 ftok=()
 form_token_args() {
-  local v
-  v=$(sed -n 's/.*name="form_token" value="\([^"]*\)".*/\1/p' "$body" | head -n 1)
   ftok=()
+  local v
+  v=$(FORM_ACTION="$1" awk '{ s = s $0 "\n" }
+    END {
+      want = " action=\"" ENVIRON["FORM_ACTION"] "\""
+      while ((i = index(s, "<form")) > 0) {
+        s = substr(s, i + 5); e = index(s, ">"); if (e == 0) exit
+        tag = substr(s, 1, e); s = substr(s, e + 1)
+        if (index(tag, want) == 0) continue
+        c = index(s, "</form>"); f = (c > 0) ? substr(s, 1, c - 1) : s
+        k = index(f, "name=\"form_token\" value=\""); if (k == 0) exit
+        f = substr(f, k + 25); q = index(f, "\""); if (q > 0) print substr(f, 1, q - 1)
+        exit
+      }
+    }' "$body")
   [[ -z "$v" ]] || ftok=(--data-urlencode "form_token=$v")
 }
 expect() { # expect <step> <want> <got>
@@ -90,7 +105,7 @@ ok "1 setup code found in the console log"
 status=$(req GET /setup)
 expect "step 2 GET /setup" 200 "$status"
 token=$(csrf "step 2")
-form_token_args
+form_token_args /setup
 ok "2 GET /setup 200"
 
 # 3. A wrong code.
@@ -98,7 +113,7 @@ wrong_code="wrong-setup-code"
 status=$(req POST /setup --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "code=$wrong_code")
 expect "step 3 wrong code" 401 "$status"
 token=$(csrf "step 3")
-form_token_args
+form_token_args /setup
 ok "3 POST /setup wrong code 401"
 
 # 4. The right code.
@@ -110,7 +125,7 @@ ok "4 POST /setup 303 Location /setup/owner"
 status=$(req GET /setup/owner)
 expect "step 5 GET /setup/owner" 200 "$status"
 token=$(csrf "step 5")
-form_token_args
+form_token_args /setup/owner
 
 owner_post() { # owner_post <action>
   req POST /setup/owner --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "action=$1" \
@@ -124,7 +139,7 @@ status=$(owner_post test)
 expect "step 5 connection test" 200 "$status"
 grep -qF "Checks: $checks_expected." "$body" || fail "step 5: page lacks Checks: $checks_expected."
 token=$(csrf "step 5 result")
-form_token_args
+form_token_args /setup/owner
 ok "5 POST /setup/owner test 200 Checks: $checks_expected."
 
 # 6. Complete: the Location names the flow.
@@ -149,7 +164,7 @@ sign_in() {
   s=$(req GET /sign-in)
   expect "$2 GET /sign-in" 200 "$s"
   token=$(csrf "$2")
-  form_token_args
+  form_token_args /sign-in
   next=$(sed -n 's/.*name="next" value="\([^"]*\)".*/\1/p' "$body" | head -n 1)
   sign_in_args=(--data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "next=${next:-/}"
     --data-urlencode "email=$owner_email" --data-urlencode "password=$1")
@@ -210,14 +225,14 @@ if [[ "$flow" == two-factor ]]; then
     s=$(req GET /sign-in/factor)
     expect "$2 GET /sign-in/factor" 200 "$s"
     token=$(csrf "$2 factor")
-    form_token_args
+    form_token_args /sign-in/factor
   }
 
   # 7. The code is spent, from a fresh jar. Jar A keeps the enrol session.
   use_jar S
   status=$(req GET /sign-in)
   token=$(csrf "step 7")
-  form_token_args
+  form_token_args /setup
   status=$(req POST /setup --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "code=$code")
   expect "step 7 reused code" 404 "$status"
   ok "7 POST /setup reused code 404"
@@ -227,7 +242,7 @@ if [[ "$flow" == two-factor ]]; then
   status=$(req GET /account/authenticator)
   expect "step 8 GET /account/authenticator" 200 "$status"
   token=$(csrf "step 8")
-  form_token_args
+  form_token_args /account/authenticator
   status=$(req POST /account/authenticator --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "action=new")
   expect "step 8 action=new" 303 "$status"
   expect_location "step 8 action=new" /account/authenticator
@@ -236,7 +251,7 @@ if [[ "$flow" == two-factor ]]; then
   setup_key=$(tr -d '\n' <"$body" | sed -n 's/.*id="totp-secret"[^>]*>\([^<]*\)<.*/\1/p' | tr -d ' ')
   [[ "$setup_key" =~ ^[A-Z2-7]{32}$ ]] || fail "step 8: #totp-secret is not 32 base32 characters"
   token=$(csrf "step 8 pending")
-  form_token_args
+  form_token_args /account/authenticator
   ok "8 action=new 303, GET /account/authenticator 200 with a setup key"
   status=$(req GET /)
   expect "step 8 GET / while enrolling" 303 "$status"
@@ -291,8 +306,10 @@ if [[ "$flow" == two-factor ]]; then
   status=$(req GET /account/sessions)
   expect "step 11 GET /account/sessions" 200 "$status"
   grep -qF "This browser" "$body" || fail "step 11: sessions page lacks This browser"
+  status=$(req GET /account/sessions/sign-out-all)
+  expect "step 11 GET /account/sessions/sign-out-all" 200 "$status"
   token=$(csrf "step 11")
-  form_token_args
+  form_token_args /account/sessions/sign-out-all
   status=$(req POST /account/sessions/sign-out-all --data-urlencode "csrf=$token" "${ftok[@]}")
   expect "step 11 sign out all" 303 "$status"
   expect_location "step 11 sign out all" "/account/sessions?signed-out=others"
@@ -372,7 +389,7 @@ fi
 rm -f "$jar"
 status=$(req GET /sign-in)
 token=$(csrf "step 7")
-form_token_args
+form_token_args /setup
 status=$(req POST /setup --data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "code=$code")
 expect "step 7 reused code" 404 "$status"
 ok "7 POST /setup reused code 404"
