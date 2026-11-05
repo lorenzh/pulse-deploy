@@ -49,6 +49,8 @@ jobs:
         run: bash e2e/published-port.test.sh
       - name: console-setup form tokens (stub curl, docker, node)
         run: bash e2e/console-setup.test.sh
+      - name: dev console probe prefills (compose config)
+        run: bash e2e/dev-console-prefills.test.sh
       - name: Static setup checks
         run: scripts/check-setup.sh
       - name: Static setup checks reject broken setups

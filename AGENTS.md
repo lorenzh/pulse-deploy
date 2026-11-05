@@ -48,6 +48,7 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 | manual_count helpers test | `bash e2e/manual-count.test.sh` |
 | published_port helper test | `bash e2e/published-port.test.sh` |
 | console-setup form tokens (stub curl, docker, node) | `bash e2e/console-setup.test.sh` |
+| dev console probe prefills | `bash e2e/dev-console-prefills.test.sh` |
 | Static setup checks | `scripts/check-setup.sh` |
 | Static checks reject broken setups | `bash scripts/check-setup.test.sh` |
 | secrets-init tests (Docker) | `bash scripts/secrets-init.test.sh` |
