@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end test of the full setup on the published images, with the test-only fixtures of
+# End-to-end test of the full setup on the published images (E2E_SETUP=full, the default) or of
+# the dev setup built from the sibling checkouts (E2E_SETUP=dev), with the test-only fixtures of
 # e2e/compose.e2e.yaml. See README.md ("End-to-end test").
 # Needs Docker Compose >= 2.23, network access, curl and jq.
 set -euo pipefail
@@ -10,8 +11,18 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # COMPOSE_PROJECT_NAME such as `pulse` would delete real volumes.
 export COMPOSE_PROJECT_NAME=pulse-e2e
 project="$COMPOSE_PROJECT_NAME"
-# The e2e fixtures live in e2e/compose.e2e.yaml, merged after full/compose.yaml for every call.
-export COMPOSE_FILE=full/compose.yaml:e2e/compose.e2e.yaml
+# E2E_SETUP selects only the base Compose file, never a test path: the api is detected for that.
+E2E_SETUP="${E2E_SETUP:-full}"
+case "$E2E_SETUP" in
+  full | dev) ;;
+  *)
+    printf 'FAIL: E2E_SETUP must be full or dev\n' >&2
+    exit 1
+    ;;
+esac
+base_file="${E2E_SETUP}/compose.yaml"
+# The e2e fixtures live in e2e/compose.e2e.yaml, merged after the base file for every call.
+export COMPOSE_FILE="${base_file}:e2e/compose.e2e.yaml"
 # Throwaway secrets of this run, never the user's secrets/ directory.
 secrets_dir="$PWD/e2e/.secrets"
 export PULSE_SECRETS_DIR="$secrets_dir"
@@ -303,7 +314,7 @@ for tool in docker curl jq; do
   command -v "$tool" >/dev/null || fail "$tool is required"
 done
 if ! docker compose config | grep -qx "name: ${project}"; then
-  fail "COMPOSE_PROJECT_NAME does not override the name in full/compose.yaml"
+  fail "COMPOSE_PROJECT_NAME does not override the name in ${base_file}"
 fi
 # The regular stack must carry no e2e fixture: only the e2e files may.
 jq -e '[.checks[].id | select(test("e2e"))] | length == 0' "$regular_checks" >/dev/null ||
@@ -324,15 +335,22 @@ fi
   mv -f "$admin_tmp" "$secrets_dir/admin-token"
 )
 scripts/init-secrets.sh --dir "$secrets_dir"
-# Hard-coded on purpose: a list derived from full/compose.yaml would accept any extra service.
-regular_services=$(docker compose -f full/compose.yaml config --services | sort | paste -sd' ' -)
+# Hard-coded on purpose: a list derived from the base file would accept any extra service.
+regular_services=$(docker compose -f "$base_file" config --services | sort | paste -sd' ' -)
 [[ "$regular_services" == "api console notify probe secrets-init status" ]] ||
-  fail "the full setup has the services: ${regular_services}"
-echo "ok: the full setup has exactly api, console, notify, probe, secrets-init and status"
-# The e2e tests the published images: no service may be built.
-docker compose config --format json | jq -e '[.services[] | select(has("build"))] | length == 0' >/dev/null ||
-  fail "a service of the e2e stack has a build key"
-echo "ok: no service of the e2e stack is built"
+  fail "the ${E2E_SETUP} setup has the services: ${regular_services}"
+echo "ok: the ${E2E_SETUP} setup has exactly api, console, notify, probe, secrets-init and status"
+built=$(docker compose config --format json | jq -r '[.services | to_entries[] | select(.value | has("build")) | .key] | sort | join(" ")')
+if [[ "$E2E_SETUP" == full ]]; then
+  # The full e2e tests the published images: no service may be built.
+  [[ -z "$built" ]] || fail "a service of the e2e stack has a build key: ${built}"
+  echo "ok: no service of the e2e stack is built"
+else
+  # The dev e2e builds every pulse service from its checkout; the helpers are never built.
+  [[ "$built" == "api console notify probe status" ]] ||
+    fail "the dev e2e stack builds: ${built:-nothing}"
+  echo "ok: the dev e2e stack builds api, console, notify, probe and status, not secrets-init or e2e-target"
+fi
 # The api container runs as another user than the host: the directory must be open to it.
 mkdir -p "$rw_dir"
 chmod 777 "$rw_dir"
@@ -341,6 +359,11 @@ chmod 666 "$checks_file"
 checks_backup=$(mktemp)
 cp "$checks_file" "$checks_backup"
 docker compose down -v --remove-orphans
+
+if [[ "$E2E_SETUP" == dev ]]; then
+  step "Build the dev images from the sibling checkouts"
+  docker compose build
+fi
 
 step "Start the regular stack"
 docker compose up -d --pull missing
@@ -576,6 +599,269 @@ echo "ok: delete removes the incident from reads"
 assert_absent "GET /metrics" "$(api /metrics)"
 if grep -qF -- "$e2e_admin_token" <<<"$(docker compose logs --no-color)"; then fail "the logs show the admin token"; fi
 echo "ok: the container logs show no admin token"
+
+# The literal sentinels of the privacy step. The expected values come from here, never from the api.
+priv_draft=e2e-draft-7f3a
+priv_internal=e2e-internal-5d17
+priv_note=e2e-note-2b8e
+priv_update=e2e-update-9c41
+pub_control=e2e-public-0a62
+pub_marker=e2e-marker-31c5
+priv_sentinels=("$priv_draft" "$priv_internal" "$priv_note" "$priv_update")
+
+# admin_req <method> <path> [body]: call with the admin token. Sets reply_code and reply_body.
+admin_req() {
+  local args=(-sS --max-time 5 -w '\n%{http_code}' -X "$1" -H "Authorization: Bearer ${e2e_admin_token}")
+  [[ -n "${3:-}" ]] && args+=(-H 'Content-Type: application/json' -d "$3")
+  local out
+  out=$(curl "${args[@]}" "http://127.0.0.1:${api_port}$2") || out=$'\n000'
+  reply_code=${out##*$'\n'}
+  reply_body=${out%$'\n'*}
+}
+
+# expect_reply <method> <path> <code> [body]: admin_req, then fail unless the status is <code>.
+expect_reply() {
+  admin_req "$1" "$2" "${4:-}"
+  [[ "$reply_code" == "$3" ]] || fail "$1 $2 answered ${reply_code}, expected $3"
+}
+
+# notify_polls_ok: the value of pulse_notify_polls_total{outcome="ok"}, read as notify_has_polled reads it.
+notify_polls_ok() {
+  local text
+  text=$(docker compose exec -T notify bun -e \
+    "fetch('http://127.0.0.1:9100/metrics').then(async (r) => console.log(await r.text()))") || return 1
+  awk '$1 == "pulse_notify_polls_total{outcome=\"ok\"}" { print $2; found = 1 } END { exit !found }' <<<"$text"
+}
+
+notify_polled_after() { # notify_polled_after <n>: a poll finished after the one counted as <n>
+  local now
+  now=$(notify_polls_ok) || return 1
+  awk -v a="$now" -v b="$1" 'BEGIN { exit !(a + 0 > b + 0) }'
+}
+
+# badge_state <component>: the state word of the badge, from its <title> (<label>: <state> <uptime>).
+badge_state() {
+  local svg title
+  svg=$(status_page "/badge/component/$1.svg") || return 1
+  title=$(sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p' <<<"$svg" | head -n 1)
+  [[ -n "$title" ]] || return 1
+  title=${title##*: }
+  printf '%s\n' "${title%% *}"
+}
+
+badge_is() { [[ "$(badge_state "$1")" == "$2" ]]; }
+
+channel_text() { docker compose exec -T notify cat "/data/$1" 2>/dev/null || true; }
+
+# channel_lines_with <file> <fixed text>: lines of a notify channel file that hold the text.
+channel_lines_with() { channel_text "$1" | grep -cF -- "$2" || true; }
+
+proxy_lists() { proxy_manual | jq -e --argjson id "$1" 'any(.[]; .id == $id)'; }
+page_has() { status_page / | grep -qF -- "$1"; }
+
+proxy_shows_p_resolved() {
+  proxy_manual | jq -e --argjson id "$p_id" --arg u "$priv_update" \
+    'any(.[]; .id == $id and .status == "resolved" and .resolvedAt != null and (.updates | length) == 2 and .updates[1].message == $u)'
+}
+
+# assert_no_private <description> <text>: none of the four private sentinels is in the text.
+assert_no_private() {
+  local s
+  for s in "${priv_sentinels[@]}"; do
+    if grep -qF -- "$s" <<<"$2"; then fail "$1 holds the private sentinel ${s}"; fi
+  done
+  echo "ok: $1 holds no private sentinel"
+}
+
+# assert_count <description> <actual> <expected>
+assert_count() {
+  [[ "$2" == "$3" ]] || fail "$1: ${2}, expected $3"
+  echo "ok: $1: $3"
+}
+
+admin_request_lines() {
+  local body
+  body=$(api /metrics) || return 1
+  grep -E '^pulse_api_http_requests_total\{' <<<"$body" | grep -cF -- '/admin/manual-incidents' || true
+}
+
+wait_notify_settled() {
+  wait_for "$T_NOTIFY" "notify has polled" notify_has_polled
+  sleep $((POLL_INTERVAL * 3))
+}
+
+step "Manual incident privacy"
+# Detect the api once: only the answer of the private route selects this path.
+gate_code=$(manual_code GET /admin/manual-incidents "" "$e2e_admin_token")
+if [[ "$gate_code" == "404" ]]; then
+  echo "skip: manual incident privacy (api has no /admin/manual-incidents)"
+elif [[ "$gate_code" != "200" ]]; then
+  fail "GET /admin/manual-incidents answered ${gate_code}, expected 200 or 404"
+else
+  # 1. Auth.
+  [[ "$(manual_code GET /admin/manual-incidents "" "")" == "401" ]] || fail "GET /admin/manual-incidents without a token did not answer 401"
+  [[ "$(manual_code GET /admin/manual-incidents "" "$probe_token")" == "403" ]] || fail "GET /admin/manual-incidents with a probe token did not answer 403"
+  echo "ok: the private list answers 401 without a token and 403 with a probe token"
+
+  # 2. Preconditions.
+  wait_for "$T_PAGE" "the badge of web is up before any private write" badge_is web up
+  metric_is pulse_api_manual_incidents_created_total 1 || fail "pulse_api_manual_incidents_created_total is not 1 at the start"
+  metric_is pulse_api_manual_incidents_resolved_total 1 || fail "pulse_api_manual_incidents_resolved_total is not 1 at the start"
+  echo "ok: metrics count 1 created and 1 resolved at the start"
+
+  # 3. Draft D.
+  d_body=$(jq -nc --arg s "$priv_draft" '{title: $s, impact: "major", componentIds: ["web", "public-api"], message: $s, visibility: "public"}')
+  expect_reply POST /admin/manual-incidents 201 "$d_body"
+  jq -e '.publishedAt == null' <<<"$reply_body" >/dev/null || fail "the new draft D has a publishedAt"
+  d_id=$(jq -re '.id' <<<"$reply_body")
+  expect_reply PUT "/admin/manual-incidents/${d_id}" 200 "$d_body"
+  echo "ok: draft D ${d_id} saved and edited"
+
+  # 4. Internal I.
+  i_body=$(jq -nc --arg s "$priv_internal" '{title: $s, impact: "critical", componentIds: ["web", "public-api"], message: $s, visibility: "internal"}')
+  expect_reply POST /admin/manual-incidents 201 "$i_body"
+  i_id=$(jq -re '.id' <<<"$reply_body")
+  expect_reply POST "/admin/manual-incidents/${i_id}/publish" 200
+  jq -e '.visibility == "internal" and .publishedAt != null' <<<"$reply_body" >/dev/null ||
+    fail "the published internal incident I is not internal with a publishedAt"
+  echo "ok: internal I ${i_id} published"
+
+  # 5. Public control P with a note and a draft update. The draft update save is the last private write.
+  p_body=$(jq -nc --arg s "$pub_control" '{title: $s, impact: "none", componentIds: ["web"], message: $s, visibility: "public"}')
+  expect_reply POST /admin/manual-incidents 201 "$p_body"
+  p_id=$(jq -re '.id' <<<"$reply_body")
+  expect_reply POST "/admin/manual-incidents/${p_id}/notes" 201 "$(jq -nc --arg s "$priv_note" '{message: $s}')"
+  expect_reply POST "/admin/manual-incidents/${p_id}/publish" 200
+  expect_reply PUT "/admin/manual-incidents/${p_id}/draft" 200 "$(jq -nc --arg s "$priv_update" '{status: "resolved", message: $s}')"
+  echo "ok: public P ${p_id} published with a note and a saved draft update"
+
+  # 6. Marker M by a legacy write, after the 200 of the last private write.
+  m_code=$(manual_code POST /manual-incidents "$(jq -nc --arg s "$pub_marker" '{title: $s, impact: "none", componentIds: ["web"], message: $s}')" "$e2e_admin_token")
+  [[ "$m_code" == "201" ]] || fail "the legacy create of marker M answered ${m_code}"
+  m_id=$(api /manual-incidents | jq -re --arg t "$pub_marker" 'first(.[] | select(.title == $t)) | .id')
+  echo "ok: marker M ${m_id} created"
+
+  # 7. Barrier: every surface has read the api after the last private write.
+  wait_for "$T_NOTIFY" "notify sent manual:${m_id}:opened to the web channel" manual_sent manual-web.jsonl "manual:${m_id}:opened"
+  polls=$(notify_polls_ok) || fail "no pulse_notify_polls_total{outcome=\"ok\"} series"
+  wait_for "$T_NOTIFY" "notify finished another good poll after M" notify_polled_after "$polls"
+  sleep $((POLL_INTERVAL * 3))
+  assert_count "lines of manual:${p_id}:opened in manual-web.jsonl" "$(manual_count manual-web.jsonl "manual:${p_id}:opened")" 1
+  wait_for "$T_PAGE" "the status proxy lists M" proxy_lists "$m_id"
+  wait_for "$T_PAGE" "the feed has manual:${m_id}:0" feed_has "manual:${m_id}:0"
+  wait_for "$T_PAGE" "GET / holds the marker title" page_has "$pub_marker"
+
+  # 8. Absence, each read after the barrier.
+  for q in "" "?status=open" "?status=all"; do
+    assert_no_private "GET /manual-incidents${q}" "$(api "/manual-incidents${q}")"
+  done
+  for id in "$d_id" "$i_id"; do
+    [[ "$(manual_code GET "/manual-incidents/${id}" "" "")" == "404" ]] || fail "GET /manual-incidents/${id} of a private incident did not answer 404"
+  done
+  echo "ok: the public reads of D and I answer 404"
+  api /manual-incidents | jq -e --argjson id "$p_id" \
+    'any(.[]; .id == $id and .status != "resolved" and .resolvedAt == null and (.updates | length) == 1)' >/dev/null ||
+    fail "the public list does not show P open with exactly 1 update"
+  echo "ok: the public list shows P open with 1 update"
+  assert_no_private "the status proxy /api/manual-incidents" "$(proxy_manual)"
+  assert_no_private "GET / of the status page" "$(status_page /)"
+  feed=$(status_page /feed.atom)
+  assert_no_private "/feed.atom" "$feed"
+  if grep -qF -- "manual:${p_id}:1" <<<"$feed"; then fail "/feed.atom has the unpublished update manual:${p_id}:1"; fi
+  echo "ok: /feed.atom has no manual:${p_id}:1"
+  badge_is web up || fail "the badge of web is not up after the barrier"
+  echo "ok: the badge of web is up after the barrier"
+  for file in incidents.jsonl manual-web.jsonl manual-public-api.jsonl; do
+    for key in "manual:${d_id}:" "manual:${i_id}:" "${priv_sentinels[@]}"; do
+      assert_count "lines with ${key} in ${file}" "$(channel_lines_with "$file" "$key")" 0
+    done
+  done
+  assert_count "update lines of P in manual-web.jsonl" "$(manual_update_count manual-web.jsonl "$p_id")" 0
+  assert_count "lines of manual:${p_id}:resolved in manual-web.jsonl" "$(manual_count manual-web.jsonl "manual:${p_id}:resolved")" 0
+
+  # 9. Metrics before the api restart, read anonymously.
+  metric_is pulse_api_manual_incidents_created_total 3 || fail "pulse_api_manual_incidents_created_total is not 3 before the restart"
+  metric_is pulse_api_manual_incidents_resolved_total 1 || fail "pulse_api_manual_incidents_resolved_total is not 1 before the restart"
+  echo "ok: metrics count 3 created and 1 resolved before the restart"
+  assert_count "request counter lines that name /admin/manual-incidents" "$(admin_request_lines)" 0
+
+  # 10. Restart api and notify: drafts and notes persist, counters start at 0.
+  docker compose restart api notify
+  wait_for "$T_UP" "api is healthy after the restart" is_healthy api
+  wait_for "$T_UP" "notify is healthy after the restart" is_healthy notify
+  wait_for "$T_UP" "GET /readyz on the api answers ok after the restart" api_readyz_ok
+  wait_for "$T_NOTIFY" "notify has polled after the restart" notify_has_polled
+  metric_is pulse_api_manual_incidents_created_total 0 || fail "pulse_api_manual_incidents_created_total is not 0 after the restart"
+  metric_is pulse_api_manual_incidents_resolved_total 0 || fail "pulse_api_manual_incidents_resolved_total is not 0 after the restart"
+  echo "ok: metrics count 0 created and 0 resolved after the restart"
+  expect_reply GET "/admin/manual-incidents/${d_id}" 200
+  jq -e '.publishedAt == null' <<<"$reply_body" >/dev/null || fail "draft D lost its draft state across the restart"
+  expect_reply GET "/admin/manual-incidents/${p_id}" 200
+  jq -e --arg n "$priv_note" --arg u "$priv_update" 'any(.notes[]; .message == $n) and .draft.message == $u' <<<"$reply_body" >/dev/null ||
+    fail "P lost its note or its draft update across the restart"
+  echo "ok: draft D, the note and the draft update of P persist across the restart"
+
+  # 11. Publish the draft update of P.
+  expect_reply POST "/admin/manual-incidents/${p_id}/publish" 200
+  jq -e '.status == "resolved"' <<<"$reply_body" >/dev/null || fail "publishing the draft update of P did not resolve P"
+  expect_reply POST "/admin/manual-incidents/${p_id}/publish" 409
+  echo "ok: the draft update of P is published once; again answers 409"
+  wait_for "$T_NOTIFY" "notify sent manual:${p_id}:resolved to the web channel" manual_sent manual-web.jsonl "manual:${p_id}:resolved"
+  wait_for "$T_PAGE" "the feed has manual:${p_id}:1" feed_has "manual:${p_id}:1"
+  wait_for "$T_PAGE" "the status proxy shows P resolved with 2 updates" proxy_shows_p_resolved
+  for text in "$(proxy_manual)" "$(status_page /)" "$(status_page /feed.atom)"; do
+    if grep -qF -- "$priv_note" <<<"$text"; then fail "a status surface holds the note"; fi
+  done
+  echo "ok: no status surface holds the note"
+  for file in incidents.jsonl manual-web.jsonl manual-public-api.jsonl; do
+    assert_count "lines with the note in ${file}" "$(channel_lines_with "$file" "$priv_note")" 0
+  done
+
+  # 12. Publish D, then resolve I through the private routes only, then resolve D and M.
+  expect_reply POST "/admin/manual-incidents/${d_id}/publish" 200
+  wait_for "$T_NOTIFY" "notify sent manual:${d_id}:opened to the public-api channel" manual_sent manual-public-api.jsonl "manual:${d_id}:opened"
+  wait_for "$T_NOTIFY" "notify sent manual:${d_id}:opened to the web channel" manual_sent manual-web.jsonl "manual:${d_id}:opened"
+  wait_for "$T_PAGE" "the badge of web is down once D is public" badge_is web down
+  [[ "$(manual_code POST "/manual-incidents/${i_id}/resolve" '{"message":"Resolved."}' "$e2e_admin_token")" == "404" ]] ||
+    fail "the legacy resolve of the internal I did not answer 404"
+  echo "ok: the legacy resolve of the internal I answers 404"
+  expect_reply PUT "/admin/manual-incidents/${i_id}/draft" 200 "$(jq -nc --arg s "$priv_internal" '{status: "resolved", message: $s}')"
+  expect_reply POST "/admin/manual-incidents/${i_id}/publish" 200
+  jq -e '.status == "resolved"' <<<"$reply_body" >/dev/null || fail "publishing the resolution of I did not resolve I"
+  echo "ok: the internal I is resolved through the private routes"
+  for id in "$d_id" "$m_id"; do
+    [[ "$(manual_code POST "/manual-incidents/${id}/resolve" '{"message":"Resolved."}' "$e2e_admin_token")" == "200" ]] ||
+      fail "the legacy resolve of ${id} did not answer 200"
+  done
+  echo "ok: D and M are resolved"
+
+  # 13. Discard a draft.
+  expect_reply POST /admin/manual-incidents 201 '{"title":"e2e-discard-4e90","impact":"none","componentIds":["web"],"message":"e2e-discard-4e90","visibility":"public"}'
+  x_id=$(jq -re '.id' <<<"$reply_body")
+  expect_reply DELETE "/admin/manual-incidents/${x_id}" 204
+  expect_reply GET "/admin/manual-incidents/${x_id}" 404
+  echo "ok: a discarded draft is gone"
+
+  # 14. A notify restart repeats no handled event and never sends the internal I.
+  docker compose restart notify
+  wait_for "$T_UP" "notify is healthy after the second restart" is_healthy notify
+  wait_notify_settled
+  for key in "manual:${p_id}:opened" "manual:${p_id}:resolved" "manual:${m_id}:opened" "manual:${d_id}:opened"; do
+    assert_count "lines of ${key} in manual-web.jsonl" "$(manual_count manual-web.jsonl "$key")" 1
+  done
+  assert_count "lines of manual:${d_id}:opened in manual-public-api.jsonl" "$(manual_count manual-public-api.jsonl "manual:${d_id}:opened")" 1
+  for file in incidents.jsonl manual-web.jsonl manual-public-api.jsonl; do
+    assert_count "lines with manual:${i_id}: in ${file}" "$(channel_lines_with "$file" "manual:${i_id}:")" 0
+    assert_count "lines with ${priv_internal} in ${file}" "$(channel_lines_with "$file" "$priv_internal")" 0
+  done
+
+  # 15. Metrics counted from the restart of step 10.
+  metric_is pulse_api_manual_incidents_created_total 1 || fail "pulse_api_manual_incidents_created_total is not 1 at the end"
+  metric_is pulse_api_manual_incidents_resolved_total 3 || fail "pulse_api_manual_incidents_resolved_total is not 3 at the end"
+  echo "ok: metrics count 1 created and 3 resolved at the end"
+  assert_count "request counter lines that name /admin/manual-incidents at the end" "$(admin_request_lines)" 0
+  echo "ok: manual incident privacy"
+fi
 
 # shellcheck source=e2e/outage-history.sh
 source e2e/outage-history.sh

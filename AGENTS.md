@@ -12,7 +12,7 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 | --- | --- |
 | `common/services.yaml` | Every image pin; shared env, healthcheck and hardening. No host paths. |
 | `minimal/`, `full/`, `demo/`, `dev/` | One setup each: `compose.yaml`, `.env.example`, `README.md`, config files. |
-| `e2e/` | The test-only overlay `compose.e2e.yaml` and `compose-e2e.sh`, the end-to-end test of `full`. |
+| `e2e/` | The test-only overlay `compose.e2e.yaml` and `compose-e2e.sh`, the end-to-end test of `full` or `dev`. |
 | `scripts/` | `init-secrets.sh`, `secrets-init.mjs`, `wait-ready.sh`, `bump-images.sh`, `check-setup.sh`, `measure.sh` and their tests. |
 | `cli/` | The `pulse` CLI (`init`, `up`, `down`, `status`), its `bun test` tests and `cli/test/` (CI scripts, stub docker, hook receiver, timing). |
 | `docs/` | `cli.md`: install, wizard, flags and the way without the CLI. |
@@ -58,8 +58,9 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 | Start a setup and wait | `scripts/init-secrets.sh && docker compose -f <setup>/compose.yaml up -d && scripts/wait-ready.sh <setup>/compose.yaml 300` |
 | Start time and RSS | `scripts/measure.sh <setup>` |
 | End-to-end test of `full` (about 4 min) | `bash e2e/compose-e2e.sh` |
+| End-to-end test of `dev` (builds from the sibling checkouts) | `E2E_SETUP=dev bash e2e/compose-e2e.sh` |
 
-CI (`.github/workflows/ci.yml`) runs the jobs `lint`, `pins`, `minimal`, `full` (readiness, then the end-to-end test), `demo`, `dev` (built from each service's `main`, also daily, then `cli/test/stack.sh dev`), `cli-build` (on ubuntu-24.04, ubuntu-24.04-arm and macos-15), `cli-render`, `cli-stack` (demo, full, minimal), `cli-errors` and, on Monday schedules, `pins-latest`. `release.yml` publishes the CLI binaries on a `v*` tag. Run every check of a job that your change touches before handoff, shellcheck from the repository root so `source=` paths resolve.
+CI (`.github/workflows/ci.yml`) runs the jobs `lint`, `pins`, `minimal`, `full` (readiness, then the end-to-end test), `demo`, `dev` (built from each service's `main`, also daily, then `cli/test/stack.sh dev`), `e2e-dev` (the end-to-end test on `dev` built from each service's `main`; it requires `ok: manual incident privacy`), `cli-build` (on ubuntu-24.04, ubuntu-24.04-arm and macos-15), `cli-render`, `cli-stack` (demo, full, minimal), `cli-errors` and, on Monday schedules, `pins-latest`. `release.yml` publishes the CLI binaries on a `v*` tag. Run every check of a job that your change touches before handoff, shellcheck from the repository root so `source=` paths resolve.
 
 ## Documentation
 

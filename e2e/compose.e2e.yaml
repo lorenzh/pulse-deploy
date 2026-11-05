@@ -1,6 +1,8 @@
-# TEST ONLY. E2E fixtures, merged after full/compose.yaml by e2e/compose-e2e.sh only:
-# COMPOSE_FILE=full/compose.yaml:e2e/compose.e2e.yaml. Never part of a user setup.
-# Relative paths resolve from full/, the directory of the first file.
+# TEST ONLY. E2E fixtures, merged after full/compose.yaml or dev/compose.yaml by e2e/compose-e2e.sh
+# only: COMPOSE_FILE=full/compose.yaml:e2e/compose.e2e.yaml (E2E_SETUP=full) or
+# COMPOSE_FILE=dev/compose.yaml:e2e/compose.e2e.yaml (E2E_SETUP=dev). Never part of a user setup.
+# Relative paths resolve from full/ or dev/, the directory of the first file. Both are siblings of
+# e2e/, so ../e2e/... works for both. No image line here: the base file decides the images.
 services:
   api:
     environment:
