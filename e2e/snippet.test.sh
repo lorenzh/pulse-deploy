@@ -80,7 +80,7 @@ wait_case() {
     t0=$((NOW - $3))
     at=$t0
     [[ "$5" == old ]] && at=$((t0 - 1))
-    # shellcheck disable=SC2329 # called by wait_reported
+    # shellcheck disable=SC2317,SC2329 # called by wait_reported
     curl() { sleep "$STUB_DELAY"; printf '[{"name":"e2e-run","lastResultAt":%s}]' "$STUB_AT"; }
     STUB_DELAY=$4 STUB_AT=$at
     wait_reported e2e-run "$t0" "wait test"
