@@ -617,7 +617,54 @@ check_has_result() { api "/checks/$1/results?limit=1" | jq -e 'length > 0'; }
 page_has_check_name() { status_page /api/checks | grep -qF -- "$1"; }
 page_lacks_check_name() { ! page_has_check_name "$1"; }
 
+cfg_get() { # GET /admin/config: the body
+  curl -fsS --max-time 5 -H "Authorization: Bearer ${e2e_admin_token}" "${cfg_url}/admin/config"
+}
+
+# The literal values of the database scenario. The expected values come from here, never from the api.
+db_svc_token="${E2E_SVC_TOKEN:-e2e-svc-token-sentinel}"
+db_post_auth="Bearer ${db_svc_token}"
+db_post_body='{"ping":"e2e-body-sentinel"}'
+
+check_name_is() { # check_name_is <id> <name>
+  api /checks | jq -e --arg id "$1" --arg n "$2" '.[] | select(.id == $id and .name == $n)'
+}
+db_shadowed() { # db_shadowed <id>: listed under shadowed, as a database check
+  cfg_get | jq -e --arg id "$1" '.shadowed | any(.id == $id and .source == "database")'
+}
+file_state_is() { cfg_get | jq -e --arg s "$1" '.file.state == $s'; }
+db_check_listed() { # db_check_listed <id>: an effective database check in GET /admin/config
+  cfg_get | jq -e --arg id "$1" '.checks | any(.id == $id and .source == "database")'
+}
+probe_has_literals() { # e2e-db-post still holds the literal header and body; prints nothing
+  curl -fsS --max-time 5 -H "Authorization: Bearer ${probe_token}" "${cfg_url}/probe/checks" |
+    jq -e --arg a "$db_post_auth" --arg b "$db_post_body" \
+      'any(.[]; .id == "e2e-db-post" and .headers.Authorization == $a and .body == $b)' >/dev/null
+}
+
+# atomic_replace <file> <jq filter>: apply the filter to the file and rename the result over it,
+# like an editor save or `sed -i`. A single-file bind mount keeps the old inode and misses this.
+# mktemp makes mode 600, which the container user could not read.
+atomic_replace() {
+  local file=$1 filter=$2 tmp
+  tmp=$(mktemp "$(dirname "$file")/.checks.XXXXXX")
+  jq "$filter" "$file" >"$tmp"
+  chmod 644 "$tmp"
+  mv "$tmp" "$file"
+}
+
 step "Checks via the admin API and hot reload"
+# Detect the api kind once. Nothing else selects a path: no environment variable, no pin value.
+if cfg_get | jq -e 'has("file") and has("shadowed")' >/dev/null; then
+  db_checks=1
+  expected_creates=1
+  echo "ok: the api stores admin checks in the database"
+  file_hash_before=$(sha256sum "$checks_file" | cut -d' ' -f1)
+else
+  db_checks=0
+  expected_creates=1
+  echo "ok: the api writes admin checks to the file (older api)"
+fi
 new_check='{"id":"e2e-api","name":"E2E api","url":"http://api:3000/checks","intervalMs":10000,"timeoutMs":2000}'
 [[ "$(cfg_code POST /admin/checks "$new_check")" == "201" ]] || fail "POST /admin/checks did not answer 201"
 wait_for "$T_RELOAD" "GET /checks lists e2e-api" has_check e2e-api
@@ -630,8 +677,63 @@ wait_for "$T_PAGE" "the status page shows the new name" page_has_check_name "E2E
 [[ "$(cfg_code DELETE /admin/checks/e2e-api)" == "204" ]] || fail "DELETE /admin/checks/e2e-api did not answer 204"
 wait_for "$T_PAGE" "the status page drops the check" page_lacks_check_name "E2E api renamed"
 metric_line=$(api /metrics | grep '^pulse_api_config_writes_total{kind="check",action="create",result="ok"}')
-[[ "$metric_line" == *" 1" ]] || fail "the create counter is not 1: ${metric_line}"
+[[ "$metric_line" == *" ${expected_creates}" ]] || fail "the create counter is not ${expected_creates}: ${metric_line}"
 echo "ok: create, replace and delete through the API reach the probe and the status page"
+
+if ((db_checks == 1)); then
+  # 3a: database check writes leave the checks file as it was.
+  [[ "$(sha256sum "$checks_file" | cut -d' ' -f1)" == "$file_hash_before" ]] ||
+    fail "the admin check writes changed ${checks_file}"
+  echo "ok: database check writes leave the checks file untouched"
+
+  # 3b: literal header and body round trip.
+  db_post_check=$(jq -nc --arg a "$db_post_auth" --arg b "$db_post_body" '{id: "e2e-db-post", name: "E2E db post",
+    url: "http://e2e-target:8000/svc", intervalMs: 4000, timeoutMs: 2000, method: "POST",
+    headers: {Authorization: $a, "Content-Type": "application/json"}, body: $b,
+    expectedStatus: [200], jsonAssert: [{pointer: "/status", equals: "ok"}]}')
+  [[ "$(cfg_code POST /admin/checks "$db_post_check")" == "201" ]] || fail "POST of e2e-db-post did not answer 201"
+  unset db_post_check
+  wait_for $((T_RELOAD * 2)) "e2e-db-post with literal header and body has an up result" check_state_is e2e-db-post up
+  db_config=$(cfg_get)
+  jq -e '.checks[] | select(.id == "e2e-db-post") | .headers.Authorization == {keep: true} and .body == {keep: true}' \
+    <<<"$db_config" >/dev/null || fail "GET /admin/config does not show keep markers for e2e-db-post"
+  if grep -qF -- "$db_svc_token" <<<"$db_config"; then fail "GET /admin/config shows the svc token"; fi
+  echo "ok: GET /admin/config shows keep markers and no svc token"
+  db_view=$(jq -c '.checks[] | select(.id == "e2e-db-post") | .name = "E2E db post renamed"' <<<"$db_config")
+  unset db_config
+  [[ "$(cfg_code PUT /admin/checks/e2e-db-post "$db_view")" == "200" ]] || fail "PUT of the e2e-db-post view did not answer 200"
+  unset db_view
+  wait_for "$T_RELOAD" "GET /checks shows the renamed database check" check_name_is e2e-db-post "E2E db post renamed"
+  probe_has_literals || fail "GET /probe/checks lost the literal header or body of e2e-db-post"
+  echo "ok: a GET-edit-PUT keeps the literal header and body for the probe"
+
+  # 3c: a file check with the same id shadows the database check.
+  atomic_replace "$checks_file" '.checks += [{id: "e2e-db-post", name: "E2E file shadow", url: "http://api:3000/checks", intervalMs: 10000, timeoutMs: 2000}]'
+  wait_for "$T_RELOAD" "the file check shadows e2e-db-post in GET /checks" check_name_is e2e-db-post "E2E file shadow"
+  wait_for "$T_RELOAD" "GET /admin/config lists e2e-db-post under shadowed" db_shadowed e2e-db-post
+  [[ "$(cfg_code PUT /admin/checks/e2e-db-post '{"id":"e2e-db-post","name":"E2E x","url":"http://api:3000/checks","intervalMs":10000}')" == "409" ]] ||
+    fail "PUT of a shadowed check did not answer 409"
+  echo "ok: PUT of a shadowed check answers 409"
+  cp "$checks_backup" "$checks_file"
+  wait_for "$T_RELOAD" "the database check is effective again after the file restore" check_name_is e2e-db-post "E2E db post renamed"
+
+  # 3d: a broken checks file still allows database check writes.
+  broken_tmp=$(mktemp "${rw_dir}/.checks.XXXXXX")
+  printf '{' >"$broken_tmp"
+  chmod 644 "$broken_tmp"
+  mv "$broken_tmp" "$checks_file"
+  wait_for "$T_RELOAD" "GET /admin/config reports the file as invalid" file_state_is invalid
+  [[ "$(cfg_code POST /admin/checks '{"id":"e2e-db-broken","name":"E2E db broken","url":"http://api:3000/checks","intervalMs":10000,"timeoutMs":2000}')" == "201" ]] ||
+    fail "POST with a broken checks file did not answer 201"
+  [[ "$(cfg_code DELETE /admin/checks/e2e-db-broken)" == "204" ]] || fail "DELETE with a broken checks file did not answer 204"
+  cmp -s "$checks_file" <(printf '{') || fail "a database write changed the broken checks file"
+  echo "ok: database check writes work with a broken checks file and leave it as it is"
+  cp "$checks_backup" "$checks_file"
+  wait_for "$T_RELOAD" "GET /admin/config reports the file as ok again" file_state_is ok
+
+  if grep -qF -- "$db_svc_token" <<<"$(docker compose logs --no-color)"; then fail "the logs show the svc token"; fi
+  echo "ok: the container logs show no svc token"
+fi
 
 jq '.checks += [{id: "e2e-hup", name: "E2E hup", url: "http://api:3000/checks", intervalMs: 10000, timeoutMs: 2000}]' \
   "$checks_backup" >"${checks_file}.new"
@@ -641,17 +743,6 @@ docker compose kill -s HUP api
 wait_for "$T_RELOAD" "SIGHUP applies a hand edit: GET /checks lists e2e-hup" has_check e2e-hup
 cp "$checks_backup" "$checks_file"
 wait_for "$T_RELOAD" "the polling reload drops e2e-hup" bash -c "! curl -fsS http://127.0.0.1:${api_port}/checks | jq -e '.[] | select(.id == \"e2e-hup\")'"
-
-# atomic_replace <file> <jq filter>: apply the filter to the file and rename the result over it,
-# like an editor save or `sed -i`. A single-file bind mount keeps the old inode and misses this.
-# mktemp makes mode 600, which the container user could not read.
-atomic_replace() {
-  local file=$1 filter=$2 tmp
-  tmp=$(mktemp "$(dirname "$file")/.checks.XXXXXX")
-  jq "$filter" "$file" >"$tmp"
-  chmod 644 "$tmp"
-  mv "$tmp" "$file"
-}
 
 atomic_filter='.checks += [{id: "e2e-atomic", name: "E2E atomic", url: "http://api:3000/checks", intervalMs: 10000, timeoutMs: 2000}]'
 
@@ -682,12 +773,33 @@ rm -f "$ro_backup"
 ro_backup=""
 
 # The regular mount is read-only: a second api on another port answers 503 to a write.
-ro_js='const r = await fetch("http://127.0.0.1:3999/admin/checks", { method: "POST", headers: { authorization: "Bearer " + process.env.E2E_TOKEN, "if-match": "\"sha256-" + "0".repeat(64) + "\"", "content-type": "application/json" }, body: "{}" }); console.log(r.status);'
-ro_status=$(docker compose exec -T -e PORT=3999 -e PULSE_DB=/tmp/ro.db -e PULSE_CHECKS_FILE=/config/checks.json \
-  -e E2E_TOKEN="$e2e_admin_token" -e RO_JS="$ro_js" api \
-  sh -c 'bun src/main.ts >/dev/null 2>&1 & pid=$!; sleep 4; bun -e "$RO_JS"; kill $pid' | tail -n 1 || true)
-[[ "$ro_status" == "503" ]] || fail "a write to the read-only mount did not answer 503 (got: ${ro_status})"
-echo "ok: the read-only mount answers 503"
+if ((db_checks == 1)); then
+  # Each write reads a fresh revision first: the 201 raises the generation.
+  ro_db_js='const base = "http://127.0.0.1:3999"; const auth = { authorization: "Bearer " + process.env.E2E_TOKEN };
+const etag = async () => (await fetch(base + "/admin/config", { headers: auth })).headers.get("etag");
+const post = async (path, body) => (await fetch(base + path, { method: "POST", headers: { ...auth, "if-match": await etag(), "content-type": "application/json" }, body: JSON.stringify(body) })).status;
+const c = await post("/admin/checks", { id: "e2e-ro-check", name: "E2E ro check", url: "http://api:3000/checks", intervalMs: 10000, timeoutMs: 2000 });
+const m = await post("/admin/components", { id: "e2e-ro-component", name: "E2E ro component", checkIds: ["status-page"] });
+console.log(c + " " + m);'
+  ro_status=$(docker compose exec -T -e PORT=3999 -e PULSE_DB=/tmp/ro.db -e PULSE_CHECKS_FILE=/config/checks.json \
+    -e E2E_TOKEN="$e2e_admin_token" -e RO_JS="$ro_db_js" api \
+    sh -c 'bun src/main.ts >/dev/null 2>&1 & pid=$!; sleep 4; bun -e "$RO_JS"; kill $pid' | tail -n 1 || true)
+  [[ "$ro_status" == "201 503" ]] ||
+    fail "on the read-only mount a check write did not answer 201 and a component write 503 (got: ${ro_status})"
+  echo "ok: the read-only mount (database checks): a check write answers 201, a component write 503"
+else
+  ro_js='const r = await fetch("http://127.0.0.1:3999/admin/checks", { method: "POST", headers: { authorization: "Bearer " + process.env.E2E_TOKEN, "if-match": "\"sha256-" + "0".repeat(64) + "\"", "content-type": "application/json" }, body: "{}" }); console.log(r.status);'
+  ro_status=$(docker compose exec -T -e PORT=3999 -e PULSE_DB=/tmp/ro.db -e PULSE_CHECKS_FILE=/config/checks.json \
+    -e E2E_TOKEN="$e2e_admin_token" -e RO_JS="$ro_js" api \
+    sh -c 'bun src/main.ts >/dev/null 2>&1 & pid=$!; sleep 4; bun -e "$RO_JS"; kill $pid' | tail -n 1 || true)
+  [[ "$ro_status" == "503" ]] || fail "a write to the read-only mount did not answer 503 (got: ${ro_status})"
+  echo "ok: the read-only mount answers 503"
+fi
+
+if ((db_checks == 1)); then
+  [[ "$(cfg_code POST /admin/checks '{"id":"e2e-db-keep","name":"E2E db keep","url":"http://api:3000/checks","intervalMs":10000,"timeoutMs":2000}')" == "201" ]] ||
+    fail "POST of e2e-db-keep did not answer 201"
+fi
 
 step "Persistence across down and up"
 docker compose down
@@ -700,6 +812,11 @@ wait_for "$T_PAGE" "incident ${incident_id} is still listed" has_incident "$inci
 for service in api probe status notify console; do
   wait_for "$T_UP" "$service is healthy after up" is_healthy "$service"
 done
+if ((db_checks == 1)); then
+  wait_for "$T_RELOAD" "GET /checks lists the database check e2e-db-keep after up" has_check e2e-db-keep
+  db_check_listed e2e-db-keep >/dev/null || fail "GET /admin/config does not show e2e-db-keep with source database"
+  echo "ok: e2e-db-keep persists with source database"
+fi
 
 step "Clean stop"
 # docker stop sends SIGTERM and kills after the timeout: exit 0 means the service stopped by itself.

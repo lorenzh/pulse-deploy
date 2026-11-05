@@ -4,9 +4,10 @@
 services:
   api:
     environment:
-      # The admin routes write the checks file, so it comes from a writable directory mount
-      # (a copy made by e2e/compose-e2e.sh). The regular read-only mount below stays, for the
-      # test that a read-only file answers 503.
+      # The checks file comes from a writable directory mount (a copy made by e2e/compose-e2e.sh):
+      # the pinned api 0.1.0 writes admin checks to it, and component and window writes need it on
+      # every api. An api with database checks stores checks in its database and leaves the file
+      # as it is. The regular read-only mount below stays, for the read-only write test.
       PULSE_CHECKS_FILE: /config-rw/checks.json
       PULSE_CHECKS_RELOAD_INTERVAL_MS: "2000"
     volumes:
