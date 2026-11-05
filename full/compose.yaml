@@ -38,7 +38,8 @@ services:
       - api-secrets:/run/pulse:ro
       # The directory, not the file: a rename over a single-file bind mount (editor save, `sed -i`)
       # leaves the container with the old inode. Read-only: the api reloads checks.json when it
-      # changes; an admin write answers 503. See full/README.md for a writable mount.
+      # changes. Admin check writes of an api with database checks need no writable mount; component
+      # and window writes (and every admin write of api 0.1.0) answer 503. See full/README.md.
       - ./config/api:/config:ro
     depends_on:
       secrets-init:

@@ -44,7 +44,7 @@ Mounted as the directory `./config/api:/config:ro` (an api-only directory; `noti
 
 Every check has an `id` (unique) and a `name` (display name). All keys are listed in the [pulse-api configuration docs](https://github.com/lorenzh/pulse-api/blob/main/docs/configuration.md#checksjson).
 
-The mount is read-only, so the api's admin config routes answer `503` to a write. To change checks through the api, enable admin tokens (below) and replace `./config/api:/config:ro` with a writable `./config/api:/config` in an override; the directory must be writable by uid 1000.
+The mount is read-only. The pinned api `0.1.0` answers `503` to every admin config write. An api with database checks stores admin check writes in its database and needs no writable mount for them; component and maintenance window writes still answer `503` on a read-only mount. To write components or windows through the api (or checks on `0.1.0`), enable admin tokens (below) and replace `./config/api:/config:ro` with a writable `./config/api:/config` in an override; the directory must be writable by uid 1000.
 
 ### `config/notify.json`
 
