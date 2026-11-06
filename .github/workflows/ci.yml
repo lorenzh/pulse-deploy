@@ -49,6 +49,10 @@ jobs:
         run: bash e2e/published-port.test.sh
       - name: console-setup form tokens (stub curl, docker, node)
         run: bash e2e/console-setup.test.sh
+      - name: snippet decoder and one-interval wait
+        run: bash e2e/snippet.test.sh
+      - name: dev console probe prefills (compose config)
+        run: bash e2e/dev-console-prefills.test.sh
       - name: Static setup checks
         run: scripts/check-setup.sh
       - name: Static setup checks reject broken setups
@@ -299,6 +303,7 @@ jobs:
           set -o pipefail
           E2E_SETUP=dev bash e2e/compose-e2e.sh | tee e2e-dev.log
           grep -qx 'ok: manual incident privacy' e2e-dev.log
+          grep -qx 'ok: console probe locations' e2e-dev.log
       - name: Teardown
         if: always()
         working-directory: pulse-deploy

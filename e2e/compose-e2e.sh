@@ -49,6 +49,8 @@ checks_file=${rw_dir}/checks.json
 checks_backup=""
 ro_backup=""
 created_secrets=0
+# The work directory of e2e/console-probes.sh; the trap removes its snippet probes first.
+probe_work=""
 
 step() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -85,6 +87,11 @@ cleanup() {
   fi
   # A temp file of atomic_replace that a failed step left behind.
   rm -f "$(dirname "$e2e_checks")"/.checks.?????? "$rw_dir"/.checks.??????
+  if [[ -n "$probe_work" ]]; then
+    # The snippet probes go first, through snippet_run, so the network removal never blocks.
+    bash e2e/console-probes.sh cleanup "$probe_work"
+    rm -rf "$probe_work"
+  fi
   printf '\n==> Teardown\n'
   if ! docker compose down -v --remove-orphans && ((code == 0)); then
     code=1
@@ -1085,6 +1092,31 @@ fi
 if ((db_checks == 1)); then
   [[ "$(cfg_code POST /admin/checks '{"id":"e2e-db-keep","name":"E2E db keep","url":"http://api:3000/checks","intervalMs":10000,"timeoutMs":2000}')" == "201" ]] ||
     fail "POST of e2e-db-keep did not answer 201"
+fi
+
+step "Console probe locations"
+if [[ "$E2E_SETUP" == full ]]; then
+  # The published console has no Probes screen yet.
+  echo "skip: console probe locations (published images)"
+else
+  probe_work=$(mktemp -d)
+  chmod 700 "$probe_work"
+  probe_log=$(mktemp)
+  if ! bash e2e/console-probes.sh run "$probe_work" "$api_port" "$console_port" >"$probe_log" 2>&1; then
+    cat "$probe_log"
+    rm -f "$probe_log"
+    fail "console probe locations"
+  fi
+  cat "$probe_log"
+  # No probe secret may reach the step output.
+  hits=$(grep -c -F -f "$probe_work/secrets" "$probe_log" || true)
+  rm -f "$probe_log"
+  [[ "$(wc -l <"$probe_work/secrets")" -eq 3 ]] || fail "console probe locations: want 3 probe secrets"
+  [[ "$hits" == 0 ]] || fail "console probe locations: a probe secret is in the step output"
+  bash e2e/console-probes.sh cleanup "$probe_work"
+  rm -rf "$probe_work"
+  probe_work=""
+  echo "ok: console probe locations"
 fi
 
 step "Persistence across down and up"

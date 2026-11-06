@@ -52,6 +52,14 @@ The console keeps its local accounts and sessions in the volume `console-data` (
 - TLS reverse proxy: set `PULSE_CONSOLE_PUBLIC_URL` to the public origin (for example `https://console.example.com`) in `dev/.env`. Empty means loopback mode on `http://127.0.0.1:${PULSE_CONSOLE_PORT}`.
 - Reset the console (destructive: deletes every console account and session): `docker compose -f dev/compose.yaml stop console`, `docker compose -f dev/compose.yaml rm -f console`, `docker volume rm pulse-dev_console-data`, then `up -d`. A new setup code appears.
 
+- Probe locations: the console screen `/probes` prefills the launch snippets with three fixed console settings. They are literals in `dev/compose.yaml`, not variables of `dev/.env`:
+
+  | Setting                       | Value               | Meaning                                                |
+  | ----------------------------- | ------------------- | ------------------------------------------------------ |
+  | `PULSE_CONSOLE_PROBE_API_URL` | `http://api:3000`   | The api URL that a new probe reaches.                  |
+  | `PULSE_CONSOLE_PROBE_IMAGE`   | `pulse-probe:dev`   | The probe image: the local dev build of this setup.    |
+  | `PULSE_CONSOLE_PROBE_NETWORK` | `pulse-dev_default` | The Docker network of the project `pulse-dev`.         |
+
 An existing dev install: run `scripts/init-secrets.sh` once more; it keeps the existing files and adds `admin-token` and `console-secret-key`.
 
 The console encrypts the owner's authenticator secrets with `secrets/console-secret-key`: 64 lowercase hex characters (32 random bytes) and one newline, mode `0600`. It must differ from every token. Back it up together with the `console-data` volume; one without the other cannot sign in with an authenticator. A new or lost key makes the stored authenticators unreadable: the owner then signs in with the password and a recovery code and replaces the authenticator, which uses the new key. Never replace a working key. `secrets-init` copies it to `/run/pulse/secret-key` (`PULSE_CONSOLE_SECRET_KEY_FILE`). A console `main` without two-factor sign-in ignores it.

@@ -24,8 +24,8 @@ owner_email=e2e-owner@example.com
 owner_name="E2E Owner"
 api_url=http://api:3000
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
-ok() { echo "ok: $*"; }
+# shellcheck source=e2e/console-lib.sh
+source e2e/console-lib.sh
 dc() { docker compose -f "$compose_file" "$@"; }
 
 work=$(mktemp -d)
@@ -46,55 +46,6 @@ checks_expected=$(jq '.checks | length' full/config/api/checks.json)
 # The owner password: 12 random bytes as 24 hex characters.
 password=$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')
 [[ ${#password} -eq 24 ]] || fail "password generation"
-
-# req <method> <path> [curl data args...]: prints the status; body and headers go to files.
-req() {
-  local method=$1 path=$2
-  shift 2
-  local extra=()
-  [[ "$method" == POST ]] && extra=(-H "Origin: $origin")
-  curl -sS -o "$body" -D "$headers" -w '%{http_code}' -b "$jar" -c "$jar" \
-    -X "$method" "${extra[@]}" "$@" "$base$path"
-}
-location() { tr -d '\r' <"$headers" | sed -n 's/^[Ll]ocation: //p' | tail -n 1; }
-csrf() {
-  local v
-  v=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$body" | head -n 1)
-  [[ -n "$v" ]] || fail "$1: no csrf field"
-  printf '%s' "$v"
-}
-# form_token_args <path>: sets the array ftok to the form_token field of the first form in the last
-# body whose action is exactly <path>, or to nothing. It resets ftok first, so a token of an earlier
-# page never survives. It reads only that form, never another form's token, and prints nothing.
-# Console versions without form tokens get no extra field, so the POST stays as before.
-ftok=()
-form_token_args() {
-  ftok=()
-  local v
-  v=$(FORM_ACTION="$1" awk '{ s = s $0 "\n" }
-    END {
-      want = " action=\"" ENVIRON["FORM_ACTION"] "\""
-      while ((i = index(s, "<form")) > 0) {
-        s = substr(s, i + 5); e = index(s, ">"); if (e == 0) exit
-        tag = substr(s, 1, e); s = substr(s, e + 1)
-        if (index(tag, want) == 0) continue
-        c = index(s, "</form>"); f = (c > 0) ? substr(s, 1, c - 1) : s
-        k = index(f, "name=\"form_token\" value=\""); if (k == 0) exit
-        f = substr(f, k + 25); q = index(f, "\""); if (q > 0) print substr(f, 1, q - 1)
-        exit
-      }
-    }' "$body")
-  [[ -z "$v" ]] || ftok=(--data-urlencode "form_token=$v")
-}
-expect() { # expect <step> <want> <got>
-  [[ "$3" == "$2" ]] || fail "$1: status $3, want $2"
-}
-expect_location() {
-  local got
-  got=$(location)
-  [[ "$got" == "$2" ]] || fail "$1: wrong Location"
-}
-
 # 1. The setup code: the last code line of the console log.
 code=$(dc logs --no-color console 2>/dev/null |
   sed -n 's/.*pulse-console setup code: \([^ ]*\).*/\1/p' | tail -n 1)
@@ -155,22 +106,6 @@ if [[ "$flow_wanted" != auto && "$flow_wanted" != "$flow" ]]; then
 fi
 ok "6 POST /setup/owner complete 303 flow $flow"
 
-# sign_in <password> <step>: a fresh jar, GET /sign-in, POST /sign-in. It sets status, and
-# sign_in_args to the POST fields, so step 8b can send the identical POST again.
-sign_in_args=()
-sign_in() {
-  rm -f "$jar"
-  local s next
-  s=$(req GET /sign-in)
-  expect "$2 GET /sign-in" 200 "$s"
-  token=$(csrf "$2")
-  form_token_args /sign-in
-  next=$(sed -n 's/.*name="next" value="\([^"]*\)".*/\1/p' "$body" | head -n 1)
-  sign_in_args=(--data-urlencode "csrf=$token" "${ftok[@]}" --data-urlencode "next=${next:-/}"
-    --data-urlencode "email=$owner_email" --data-urlencode "password=$1")
-  status=$(req POST /sign-in "${sign_in_args[@]}")
-}
-
 # recreate_console <n>: recreate the console; no new setup code line, GET /setup 404.
 recreate_console() {
   local since deadline logs n s
@@ -197,36 +132,6 @@ if [[ "$flow" == two-factor ]]; then
   jar_a=$jar
   secrets_file="$work/recovery-codes"
   use_jar() { jar="$work/jar-$1"; [[ "$1" == A ]] && jar=$jar_a; return 0; }
-
-  # totp_after <step> <last>: waits (at most 31 s) for a TOTP step greater than <last>.
-  # Sets totp_step and totp_code; prints nothing.
-  totp_after() {
-    local line deadline=$((SECONDS + 31))
-    while :; do
-      line=$(node e2e/totp.mjs "$setup_key") || fail "$1: e2e/totp.mjs failed"
-      [[ "$line" =~ ^([0-9]+)\ ([0-9]{6})$ ]] || fail "$1: e2e/totp.mjs output"
-      if ((BASH_REMATCH[1] > $2)); then
-        totp_step=${BASH_REMATCH[1]}
-        totp_code=${BASH_REMATCH[2]}
-        return 0
-      fi
-      ((SECONDS < deadline)) || fail "$1: no new TOTP step after 31s"
-      sleep 1
-    done
-  }
-
-  # password_step <jar> <step>: a fresh jar, the right password: 303 to /sign-in/factor.
-  password_step() {
-    use_jar "$1"
-    local s
-    sign_in "$password" "$2"
-    expect "$2 password" 303 "$status"
-    expect_location "$2 password" /sign-in/factor
-    s=$(req GET /sign-in/factor)
-    expect "$2 GET /sign-in/factor" 200 "$s"
-    token=$(csrf "$2 factor")
-    form_token_args /sign-in/factor
-  }
 
   # 7. The code is spent, from a fresh jar. Jar A keeps the enrol session.
   use_jar S
