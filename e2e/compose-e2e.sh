@@ -57,6 +57,8 @@ probe_work=""
 # e2e/console-incidents.sh; the trap removes both.
 owner_dir=""
 incidents_work=""
+# The work directory of e2e/runtime-settings.sh (the two service tokens); the trap removes it.
+runtime_work=""
 
 step() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -84,7 +86,8 @@ cleanup() {
     # The logs may hold a credential that a scan just found: print them redacted.
     local needles
     needles=$(mktemp)
-    redact_needles "$needles" "$owner_dir" "$secrets_dir" "${e2e_admin_token:-}" "${db_svc_token:-}"
+    redact_needles "$needles" "$owner_dir" "$secrets_dir" "${e2e_admin_token:-}" "${db_svc_token:-}" \
+      "$(awk 1 "$runtime_work/status-token" "$runtime_work/notify-token" 2>/dev/null)"
     docker compose logs --no-color 2>&1 | redact "$needles"
     rm -f "$needles"
   fi
@@ -105,6 +108,7 @@ cleanup() {
   fi
   [[ -z "$owner_dir" ]] || rm -rf "$owner_dir"
   [[ -z "$incidents_work" ]] || rm -rf "$incidents_work"
+  [[ -z "$runtime_work" ]] || rm -rf "$runtime_work"
   printf '\n==> Teardown\n'
   if ! docker compose down -v --remove-orphans && ((code == 0)); then
     code=1
@@ -1132,6 +1136,38 @@ else
   rm -rf "$probe_work"
   probe_work=""
   echo "ok: console probe locations"
+fi
+
+step "Runtime settings"
+if [[ "$E2E_SETUP" == full ]]; then
+  # The published status, notify and console have no runtime settings yet.
+  echo "skip: runtime settings (published images)"
+elif [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H "@"<(printf 'Authorization: Bearer %s\n' "$e2e_admin_token") \
+  "http://127.0.0.1:${api_port}/admin/notify/channels")" != 200 ]]; then
+  echo "skip: runtime settings (api has no /admin/notify/channels)"
+else
+  runtime_work=$(mktemp -d)
+  chmod 700 "$runtime_work"
+  runtime_log=$(mktemp)
+  runtime_code=0
+  E2E_ADMIN_TOKEN="$e2e_admin_token" bash e2e/runtime-settings.sh run "$runtime_work" "$owner_dir" \
+    "$api_port" "$status_port" "$console_port" >"$runtime_log" 2>&1 || runtime_code=$?
+  # No token may reach the step output: scan it before it is printed.
+  hits=$(grep -c -F -f <(awk 1 "$runtime_work/status-token" "$runtime_work/notify-token" 2>/dev/null
+    sed -n 's/^\(password\|setup_key\)=//p' "$owner_dir/owner.env"
+    printf '%s\n' "$e2e_admin_token") "$runtime_log" || true)
+  if [[ "$hits" != 0 ]]; then
+    rm -f "$runtime_log"
+    fail "runtime settings: a token is in the step output"
+  fi
+  cat "$runtime_log"
+  rm -f "$runtime_log"
+  ((runtime_code == 0)) || fail "runtime settings"
+  [[ -s "$runtime_work/status-token" && -s "$runtime_work/notify-token" ]] ||
+    fail "runtime settings: want 2 service tokens"
+  rm -rf "$runtime_work"
+  runtime_work=""
+  echo "ok: runtime settings"
 fi
 
 step "Console incidents and maintenance"

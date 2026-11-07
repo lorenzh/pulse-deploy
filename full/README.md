@@ -13,7 +13,7 @@ The whole pulse on the published images: api, one probe, status page, notify and
 | `notify`       | `ghcr.io/lorenzh/pulse-notify`           | none                                           | api healthy                       |
 | `console`      | `ghcr.io/lorenzh/pulse-console`          | `127.0.0.1:${PULSE_CONSOLE_PORT:-8082}` → 8082 | `secrets-init` exited 0; api healthy |
 
-The api is not published. The status page on port 8080 serves a filtered, read-only subset of it (`/api/uptime`, `/api/checks`, `/api/maintenance`, `/api/incidents`). `PULSE_STATUS_SHOW_CHECKS` is `true`, so the page lists the checks by name. status and console have a 5 s healthcheck interval.
+The api is not published. The status page on port 8080 serves a filtered, read-only subset of it (`/api/uptime`, `/api/checks`, `/api/maintenance`, `/api/incidents`). `PULSE_STATUS_SHOW_CHECKS` is `true`, so the page lists the checks by name; it also locks that switch in the console (see [Status page and notifications from the console](#status-page-and-notifications-from-the-console)). status and console have a 5 s healthcheck interval.
 
 Volumes: `api-data` (database), `notify-data` (notify ledger and the `file` channel output), `console-data` (console accounts and sessions), `api-secrets`, `probe-secrets` and `console-secrets` (written by `secrets-init`).
 
@@ -71,6 +71,35 @@ Copy `.env.example` to `full/.env` and uncomment a line to change it. Compose re
 | `PULSE_CONSOLE_PUBLIC_URL` | empty  | Public origin of the console behind a TLS reverse proxy. Empty: loopback mode.             |
 
 | `PULSE_STATUS_PUBLIC_URL` | unset | Read only by the email subscriptions override (below): the public root origin of the status page, for example `https://status.example.com`. |
+
+## Status page and notifications from the console
+
+With current images, the console edits the status page settings (Status page) and the notification channels (Notifications), and resends failed deliveries. Status and notify read them from the api with their own service tokens. Without the tokens, both keep working from their environment and files as before.
+
+1. Update the console first, so it can show the reports of status and notify.
+2. In the console, open Tokens and create two tokens: one with only the scope `status`, one with only the scope `notify`. Each secret is shown once.
+3. Write each secret to a file, for example `secrets/status-api-token` and `secrets/notify-api-token`, readable only by uid 1000 (the service user): `(umask 077; cat > secrets/status-api-token)`, then `sudo chown 1000:1000 secrets/status-api-token`. Mount them read-only, never below `/run/pulse`.
+4. In a Compose override file (for example `full/compose.override.yaml`, gitignored), set `PULSE_STATUS_API_TOKEN_FILE` on status and `PULSE_NOTIFY_API_TOKEN_FILE` on notify. A database channel names its URL or secret by reference only: an environment variable `PULSE_NOTIFY_SECRET_<NAME>` on notify, or a file in `PULSE_NOTIFY_SECRET_DIR` (a read-only directory mount).
+5. Recreate status and notify once: `docker compose -f full/compose.yaml -f full/compose.override.yaml up -d --force-recreate status notify`. Later changes in the console need no restart.
+
+```yaml
+services:
+  status:
+    environment:
+      PULSE_STATUS_API_TOKEN_FILE: /pulse-tokens/status-token
+    volumes:
+      - ../secrets/status-api-token:/pulse-tokens/status-token:ro
+  notify:
+    environment:
+      PULSE_NOTIFY_API_TOKEN_FILE: /pulse-tokens/notify-token
+      PULSE_NOTIFY_SECRET_DIR: /pulse-notify-secrets
+      PULSE_NOTIFY_SECRET_OPS_HOOK: https://hooks.example.com/ops # edit
+    volumes:
+      - ../secrets/notify-api-token:/pulse-tokens/notify-token:ro
+      - ../secrets/notify:/pulse-notify-secrets:ro
+```
+
+A value set on the service wins over the console. `PULSE_STATUS_SHOW_CHECKS: "true"` stays in `compose.yaml`, so the console shows Show checks as read-only, "Set by `PULSE_STATUS_SHOW_CHECKS` on pulse-status". To edit that switch in the console, delete the line from `compose.yaml`. A channel in `config/notify.json` with the same id shadows a database channel.
 
 ## Email subscriptions
 

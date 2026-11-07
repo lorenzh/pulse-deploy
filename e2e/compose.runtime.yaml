@@ -1,0 +1,37 @@
+# TEST ONLY. Runtime settings: status and notify read their settings and channels from the api with
+# their own service tokens. Merged after the base file and e2e/compose.e2e.yaml by
+# e2e/runtime-settings.sh only:
+#   docker compose -f <base> -f e2e/compose.e2e.yaml -f e2e/compose.runtime.yaml up -d \
+#     --no-deps --force-recreate status notify e2e-hook
+# Never part of a user setup: full/README.md and dev/README.md show the operator's override.
+# E2E_RUNTIME_DIR is the mode 0700 temp directory of the scenario. It holds the two token files and
+# the notify secret directory; each is mounted read-only. No image line here.
+services:
+  status:
+    environment:
+      PULSE_STATUS_API_TOKEN_FILE: /e2e-runtime/status-token
+    volumes:
+      - ${E2E_RUNTIME_DIR:?set by e2e/runtime-settings.sh}/status-token:/e2e-runtime/status-token:ro
+
+  notify:
+    environment:
+      PULSE_NOTIFY_API_TOKEN_FILE: /e2e-runtime/notify-token
+      PULSE_NOTIFY_SECRET_DIR: /e2e-runtime/notify-secrets
+      # Not a secret: the address of the test receiver below.
+      PULSE_NOTIFY_SECRET_E2E_HOOK: http://e2e-hook:8080/hook
+      # Test only: a refused delivery fails after two attempts, within seconds.
+      PULSE_NOTIFY_RETRY_ATTEMPTS: "2"
+      PULSE_NOTIFY_RETRY_DELAY_MS: "500"
+    volumes:
+      - ${E2E_RUNTIME_DIR:?set by e2e/runtime-settings.sh}/notify-token:/e2e-runtime/notify-token:ro
+      - ${E2E_RUNTIME_DIR:?set by e2e/runtime-settings.sh}/notify-secrets:/e2e-runtime/notify-secrets:ro
+
+  # The webhook receiver of the database channel e2e-db-hook: see e2e/hook.mjs.
+  e2e-hook:
+    extends: { file: ../common/services.yaml, service: bun-tools }
+    command: ["bun", "/e2e/hook.mjs"]
+    volumes:
+      - ../e2e/hook.mjs:/e2e/hook.mjs:ro
+    ports:
+      # Test only: the scenario switches the answer and reads the counts from the host.
+      - "127.0.0.1::8080"

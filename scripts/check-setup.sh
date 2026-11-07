@@ -83,6 +83,7 @@ expected_ports() {
     e2e-subs) printf '%s\n' "api 127.0.0.1 3000 3000" "console 127.0.0.1 8082 8082" "mailpit 127.0.0.1 8025 8025" "status - 8080 8080" ;;
     e2e-dev-subs) printf '%s\n' "api 127.0.0.1 3000 3000" "console 127.0.0.1 8082 8082" "mailpit 127.0.0.1 8025 8025" "status - 8080 8080" ;;
     full-subs) printf '%s\n' "console 127.0.0.1 8082 8082" "status - 8080 8080" ;;
+    e2e-runtime | e2e-dev-runtime) printf '%s\n' "api 127.0.0.1 3000 3000" "console 127.0.0.1 8082 8082" "e2e-hook 127.0.0.1 - 8080" "status - 8080 8080" ;;
   esac
 }
 compose_args() {
@@ -92,14 +93,19 @@ compose_args() {
     e2e-subs) printf '%s\n' -f full/compose.yaml -f e2e/compose.e2e.yaml -f e2e/compose.subscriptions.yaml ;;
     e2e-dev-subs) printf '%s\n' -f dev/compose.yaml -f e2e/compose.e2e.yaml -f e2e/compose.subscriptions.yaml ;;
     full-subs) printf '%s\n' -f full/compose.yaml -f full/subscriptions.example.yaml ;;
+    e2e-runtime) printf '%s\n' -f full/compose.yaml -f e2e/compose.e2e.yaml -f e2e/compose.runtime.yaml ;;
+    e2e-dev-runtime) printf '%s\n' -f dev/compose.yaml -f e2e/compose.e2e.yaml -f e2e/compose.runtime.yaml ;;
     *) printf '%s\n' -f "$1/compose.yaml" ;;
   esac
 }
-for setup in $setups e2e e2e-dev e2e-subs e2e-dev-subs full-subs; do
+for setup in $setups e2e e2e-dev e2e-subs e2e-dev-subs full-subs e2e-runtime e2e-dev-runtime; do
   mapfile -t args < <(compose_args "$setup")
   # The subscriptions override requires the public origin; set for that call only.
   if [[ "$setup" == full-subs ]]; then
     json=$(PULSE_STATUS_PUBLIC_URL=https://status.example.com config_json "${args[@]}")
+  elif [[ "$setup" == *-runtime ]]; then
+    # The runtime overlay mounts files of the scenario's temp directory; any path renders.
+    json=$(E2E_RUNTIME_DIR=/e2e-runtime-check config_json "${args[@]}")
   else
     json=$(config_json "${args[@]}")
   fi || fail "rule 5: docker compose config failed for ${setup}"
@@ -112,7 +118,7 @@ for setup in $setups e2e e2e-dev e2e-subs e2e-dev-subs full-subs; do
   # 2. Every image a setup resolves is a pin of common/services.yaml (dev: also pulse-<svc>:dev).
   while read -r image; do
     [[ "$image" =~ $pulse_re || "$image" =~ $third_re ]] && continue
-    [[ ( "$setup" == dev || "$setup" == e2e-dev || "$setup" == e2e-dev-subs ) && "$image" =~ ^pulse-(api|probe|status|notify|console):dev$ ]] && continue
+    [[ ( "$setup" == dev || "$setup" == e2e-dev || "$setup" == e2e-dev-subs || "$setup" == e2e-dev-runtime ) && "$image" =~ ^pulse-(api|probe|status|notify|console):dev$ ]] && continue
     fail "rule 2: ${setup} resolves image ${image}, which is not a digest pin"
   done < <(jq -r '.services[] | .image // "<none>"' <<<"$json")
   # 9. No host or shared network namespace: it would expose ports that rule 5 cannot see.
@@ -138,7 +144,7 @@ for setup in $setups e2e e2e-dev e2e-subs e2e-dev-subs full-subs; do
       | "\($s) tmpfs -> \(.)")' <<<"$json")
   [[ -z "$bad" ]] || fail "rule 8: ${setup} mounts under /run/pulse:"$'\n'"$bad"
 done
-ok "rule 5: the published ports of minimal, full, demo, dev, e2e, e2e-dev, e2e-subs, e2e-dev-subs and full-subs equal the table"
+ok "rule 5: the published ports of minimal, full, demo, dev, e2e, e2e-dev, e2e-subs, e2e-dev-subs, full-subs, e2e-runtime and e2e-dev-runtime equal the table"
 ok "rule 8: only a secrets volume is mounted at /run/pulse, nothing below it"
 ok "rule 10: no service in common, a setup or e2e sets profiles"
 ok "rule 9: no setup sets network_mode other than none"
