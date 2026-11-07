@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # The console Probes scenario of e2e/compose-e2e.sh (step "Console probe locations", dev only).
 # Usage, from compose-e2e.sh with its COMPOSE_FILE and COMPOSE_PROJECT_NAME exported:
-#   bash e2e/console-probes.sh run <work dir> <api port> <console port>
+#   bash e2e/console-probes.sh run <work dir> <api port> <console port> [<owner dir>]
 #   bash e2e/console-probes.sh cleanup <work dir>
 # <work dir> is an empty mktemp -d directory. run adds two probe locations through the console,
 # runs the rendered snippets in that directory, rotates and revokes a credential and removes the
 # snippet probes again. It writes <work dir>/bases as soon as the page shows a base, so cleanup (the
 # trap of compose-e2e.sh) can remove the snippet probes after a failure. It writes the probe
 # secrets to <work dir>/secrets (mode 600) for the caller's output scan. It never prints a secret.
+# With <owner dir> (a mode 700 directory), it writes the owner's email, password, TOTP setup key and
+# last used TOTP step to <owner dir>/owner.env (mode 600) right after setup, for
+# e2e/console-incidents.sh. It prints none of them.
 # Sourcing it only defines functions (e2e/snippet.test.sh tests the wait).
 set -euo pipefail
 export LC_ALL=C
@@ -167,6 +170,11 @@ run_scenario() {
 
   # 1. The owner with TOTP, through the library.
   console_owner_signed_in "probes 1"
+  if [[ -n "$owner_dir" ]]; then
+    (umask 077 && printf 'owner_email=%s\npassword=%s\nsetup_key=%s\nlast_step=%s\n' \
+      "$owner_email" "$password" "$setup_key" "$last_step" >"$owner_dir/owner.env")
+    chmod 600 "$owner_dir/owner.env"
+  fi
   ok "probes 1 owner signed in with TOTP"
 
   # 2. The location e2e-run.
@@ -326,9 +334,9 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   cd "$(dirname "${BASH_SOURCE[0]}")/.."
   case "${1:-}" in
     run)
-      [[ $# -eq 4 && -d "$2" && "$3" =~ ^[0-9]+$ && "$4" =~ ^[0-9]+$ ]] ||
-        { echo "usage: e2e/console-probes.sh run <work dir> <api port> <console port>" >&2; exit 2; }
-      work=$2 api_port=$3 console_port=$4
+      [[ ($# -eq 4 || ($# -eq 5 && -d "${5:-}")) && -d "$2" && "$3" =~ ^[0-9]+$ && "$4" =~ ^[0-9]+$ ]] ||
+        { echo "usage: e2e/console-probes.sh run <work dir> <api port> <console port> [<owner dir>]" >&2; exit 2; }
+      work=$2 api_port=$3 console_port=$4 owner_dir=${5:-}
       run_scenario
       ;;
     cleanup)
