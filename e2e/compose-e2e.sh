@@ -6,6 +6,8 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=e2e/redact.sh
+source e2e/redact.sh
 
 # Always our own project: the teardown runs `down -v`, so an inherited
 # COMPOSE_PROJECT_NAME such as `pulse` would delete real volumes.
@@ -79,7 +81,12 @@ cleanup() {
   if ((code != 0)); then
     printf '\n==> Failure (exit %s): stack state and logs\n' "$code"
     docker compose ps --all
-    docker compose logs --no-color
+    # The logs may hold a credential that a scan just found: print them redacted.
+    local needles
+    needles=$(mktemp)
+    redact_needles "$needles" "$owner_dir" "$secrets_dir" "${e2e_admin_token:-}" "${db_svc_token:-}"
+    docker compose logs --no-color 2>&1 | redact "$needles"
+    rm -f "$needles"
   fi
   if [[ -n "$checks_backup" && -f "$checks_backup" ]]; then
     cp "$checks_backup" "$checks_file"

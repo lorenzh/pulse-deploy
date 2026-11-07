@@ -55,6 +55,8 @@ jobs:
         run: bash e2e/dev-console-prefills.test.sh
       - name: Incident card extractor test
         run: bash e2e/incident-card.test.sh
+      - name: Failure logs redact credentials (stub docker)
+        run: bash e2e/redact.test.sh
       - name: email subscriptions helpers and override config
         run: bash e2e/subscriptions.test.sh
       - name: Static setup checks
