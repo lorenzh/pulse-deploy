@@ -1,0 +1,49 @@
+# Email subscriptions for full. Copy this file to full/compose.override.yaml (gitignored), edit
+# the lines marked `edit`, set PULSE_STATUS_PUBLIC_URL in full/.env, then start with:
+#   docker compose -f full/compose.yaml -f full/compose.override.yaml up -d
+# SMTP login: write the password to secrets/subscriptions-smtp-password (mode 0600), never here.
+# For a server without login, delete the two lines marked `login` and do not create the password
+# file. See full/README.md, "Email subscriptions".
+services:
+  secrets-init:
+    environment:
+      PULSE_SECRETS_SUBSCRIPTIONS: "on"
+    volumes:
+      - status-secrets:/out/status
+      - notify-secrets:/out/notify
+
+  status:
+    environment:
+      # Root origin only, no path. The same value feeds notify below, so the two cannot differ.
+      PULSE_STATUS_PUBLIC_URL: ${PULSE_STATUS_PUBLIC_URL:?set PULSE_STATUS_PUBLIC_URL in full/.env}
+      PULSE_STATUS_SUBSCRIPTIONS_URL: http://notify:9300
+      PULSE_STATUS_SUBSCRIPTIONS_TOKEN_FILE: /run/pulse/subscriptions-token
+      PULSE_STATUS_SUBSCRIPTIONS_CONTACT: privacy@example.com # edit
+    volumes:
+      - status-secrets:/run/pulse:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
+  notify:
+    environment:
+      PULSE_NOTIFY_SUBSCRIPTIONS: "on"
+      PULSE_NOTIFY_SUBSCRIPTIONS_STATUS_URL: ${PULSE_STATUS_PUBLIC_URL:?set PULSE_STATUS_PUBLIC_URL in full/.env}
+      PULSE_NOTIFY_SUBSCRIPTIONS_FROM: pulse <status@example.com> # edit
+      PULSE_NOTIFY_SUBSCRIPTIONS_SMTP_HOST: smtp.example.com # edit
+      PULSE_NOTIFY_SUBSCRIPTIONS_SMTP_PORT: "587" # edit
+      PULSE_NOTIFY_SUBSCRIPTIONS_SMTP_TLS: starttls # edit
+      PULSE_NOTIFY_SUBSCRIPTIONS_SMTP_USERNAME: status@example.com # edit, login
+      PULSE_NOTIFY_SUBSCRIPTIONS_SMTP_PASSWORD_FILE: /run/pulse/subscriptions-smtp-password # login
+      PULSE_NOTIFY_SUBSCRIPTIONS_TOKEN_FILE: /run/pulse/subscriptions-token
+      PULSE_NOTIFY_SUBSCRIPTIONS_KEY_FILE: /run/pulse/subscriptions-key
+      PULSE_NOTIFY_SUBSCRIPTIONS_STATE: /data/notify-subscriptions.db
+    volumes:
+      - notify-secrets:/run/pulse:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
+volumes:
+  status-secrets:
+  notify-secrets:

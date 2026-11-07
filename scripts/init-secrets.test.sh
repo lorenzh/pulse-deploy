@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # init-secrets.test.sh: init-secrets.sh never writes through planted temporary-file symlinks, and
-# creates probe-token, admin-token and console-secret-key on their own, each kept on a rerun.
+# creates probe-token, admin-token, console-secret-key, subscriptions-token and subscriptions-key on
+# their own, never subscriptions-smtp-password,, each kept on a rerun.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,18 +35,28 @@ if [[ "$(wc -c <"$k")" != "65" ]] || ! grep -Eqx '[0-9a-f]{64}' "$k"; then
   fail "console-secret-key is not 64 lowercase hex characters and a newline"
 fi
 grep -qf "$k" "$work/out" && fail "the console key was printed"
-echo "ok: planted symlink ignored; probe-token, admin-token and console-secret-key written 600, 64 hex"
+for name in subscriptions-token subscriptions-key; do
+  f="$d/$name"
+  [[ -f "$f" && ! -L "$f" ]] || fail "$name is not a regular file"
+  [[ "$(stat -c %a "$f")" == "600" ]] || fail "$name mode is not 600"
+  if [[ "$(wc -c <"$f")" != "65" ]] || ! grep -Eqx '[0-9a-f]{64}' "$f"; then
+    fail "$name is not 64 lowercase hex characters and a newline"
+  fi
+  grep -qf "$f" "$work/out" && fail "$name was printed"
+done
+[[ ! -e "$d/subscriptions-smtp-password" ]] || fail "init-secrets.sh created subscriptions-smtp-password"
+echo "ok: planted symlink ignored; all five secrets written 600, 64 hex; no SMTP password"
 
 # Rerun and independence: each existing token keeps its hash; a missing one is created alone.
 check_keep() { # check_keep <case> <dir>
   local dir=$2 name hash
   declare -A before=()
-  for name in probe-token admin-token console-secret-key; do
+  for name in probe-token admin-token console-secret-key subscriptions-token subscriptions-key; do
     [[ -e "$dir/$name" ]] && before[$name]=$(sha256sum <"$dir/$name")
   done
   "$root/scripts/init-secrets.sh" --dir "$dir" >"$work/out" 2>&1 || fail "$1: init-secrets.sh exited non-zero"
   [[ "$(stat -c %a "$dir")" == "700" ]] || fail "$1: the directory is not mode 700"
-  for name in probe-token admin-token console-secret-key; do
+  for name in probe-token admin-token console-secret-key subscriptions-token subscriptions-key; do
     [[ "$(stat -c %a "$dir/$name")" == "600" ]] || fail "$1: $name mode is not 600"
     grep -Eqx '[0-9a-f]{64}' "$dir/$name" || fail "$1: $name is not 64 hex characters"
     grep -qf "$dir/$name" "$work/out" && fail "$1: a token was printed"
@@ -54,7 +65,14 @@ check_keep() { # check_keep <case> <dir>
       [[ "$hash" == "${before[$name]}" ]] || fail "$1: $name changed"
     fi
   done
-  cmp -s "$dir/admin-token" "$dir/probe-token" && fail "$1: admin-token equals probe-token"
+  local -a all=(probe-token admin-token console-secret-key subscriptions-token subscriptions-key)
+  local i j
+  for ((i = 0; i < ${#all[@]}; i++)); do
+    for ((j = i + 1; j < ${#all[@]}; j++)); do
+      cmp -s "$dir/${all[i]}" "$dir/${all[j]}" && fail "$1: ${all[i]} equals ${all[j]}"
+    done
+  done
+  [[ ! -e "$dir/subscriptions-smtp-password" ]] || fail "$1: subscriptions-smtp-password was created"
   echo "ok: $1"
 }
 check_keep "a rerun keeps both tokens" "$d"
@@ -70,4 +88,12 @@ mkdir -m 700 "$work/k" && printf 'c%.0s' {1..64} >"$work/k/console-secret-key" &
 printf 'c%.0s' {1..64} >"$work/expect-k"
 check_keep "only console-secret-key exists: the tokens are created" "$work/k"
 cmp -s "$work/k/console-secret-key" "$work/expect-k" || fail "an existing console-secret-key was overwritten"
-echo "init-secrets.test: 5 cases passed"
+mkdir -m 700 "$work/s" && printf 'd%.0s' {1..64} >"$work/s/subscriptions-token" && chmod 600 "$work/s/subscriptions-token"
+printf 'd%.0s' {1..64} >"$work/expect-s"
+check_keep "only subscriptions-token exists: the others are created" "$work/s"
+cmp -s "$work/s/subscriptions-token" "$work/expect-s" || fail "an existing subscriptions-token was overwritten"
+mkdir -m 700 "$work/sk" && printf 'e%.0s' {1..64} >"$work/sk/subscriptions-key" && chmod 600 "$work/sk/subscriptions-key"
+printf 'e%.0s' {1..64} >"$work/expect-sk"
+check_keep "only subscriptions-key exists: the others are created" "$work/sk"
+cmp -s "$work/sk/subscriptions-key" "$work/expect-sk" || fail "an existing subscriptions-key was overwritten"
+echo "init-secrets.test: 7 cases passed"

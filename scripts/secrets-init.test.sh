@@ -40,9 +40,10 @@ run_init() {
   local e
   for e in "$@"; do args+=(-e "$e"); done
   # The service mounts one volume per consumer; here one volume holds them as subdirectories.
-  # MAKE_CONSOLE=1 also creates /out/console, as when the console volume is mounted.
+  # MAKE_CONSOLE=1 also creates /out/console, as when the console volume is mounted; MAKE_STATUS=1
+  # and MAKE_NOTIFY=1 create /out/status and /out/notify.
   docker run --pull never "${args[@]}" --entrypoint sh "$image" -c \
-    'mkdir -p /out/api /out/probe /out/probe-eu /out/probe-us ${MAKE_CONSOLE:+/out/console} && exec bun /scripts/secrets-init.mjs'
+    'mkdir -p /out/api /out/probe /out/probe-eu /out/probe-us ${MAKE_CONSOLE:+/out/console} ${MAKE_STATUS:+/out/status} ${MAKE_NOTIFY:+/out/notify} && exec bun /scripts/secrets-init.mjs'
 }
 
 # out_cmd <volume> <shell>: run a shell command over the output volume.
@@ -348,6 +349,160 @@ msg=$(run_init - "$out" PULSE_SECRETS_MODE=generate PULSE_SECRETS_ADMIN=on MAKE_
 [[ "$(out_cmd "$out" 'cat /out/console/secret-key')" == "not-a-key" ]] || fail "generate invalid key: the key was replaced"
 n=$((n + 1))
 echo "ok: generate mode refuses an invalid console key and keeps it"
+
+# Email subscriptions (PULSE_SECRETS_SUBSCRIPTIONS). Literal inputs; the test never derives them.
+sub_token=$(printf '5a%.0s' {1..32})
+sub_key=$(printf '7e%.0s' {1..32})
+pw='pw-e2e-Secret 42!'
+sub_files='/out/status/subscriptions-token /out/notify/subscriptions-token /out/notify/subscriptions-key /out/notify/subscriptions-smtp-password'
+sub_env=(PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_SUBSCRIPTIONS=on MAKE_STATUS=1 MAKE_NOTIFY=1)
+
+# sub_input <name> [file=content ...]: probe-token-eu, subscriptions-token and -key, then the extras.
+sub_input() {
+  local name=$1
+  shift
+  multi_input "$name" "probe-token-eu=$eu_token" "subscriptions-token=$sub_token" "subscriptions-key=$sub_key" "$@"
+}
+# pw_file <dir> <mode> <printf format> [args]: write the SMTP password input.
+pw_file() {
+  local dir=$1 mode=$2 format=$3
+  shift 3
+  # shellcheck disable=SC2059 # the format is the test input
+  printf "$format" "$@" >"$dir/subscriptions-smtp-password"
+  chmod "$mode" "$dir/subscriptions-smtp-password"
+}
+# no_secret <name> <text>: no token, key or password (or its part) in the text.
+no_secret() {
+  local t
+  for t in "$token" "$eu_token" "$sub_token" "$sub_key" "$pw" "Secret 42"; do
+    if grep -qF -- "$t" <<<"$2"; then fail "$1: the output shows a secret"; fi
+  done
+}
+# sub_refused <name> <dir> <literal stderr> [env...]: exit 1, the literal line, no file written.
+sub_refused() {
+  local name=$1 dir=$2 want=$3 out err code=0
+  shift 3
+  new_volume out
+  err=$(run_init "$dir" "$out" "$@" 2>&1) || code=$?
+  ((code == 1)) || fail "${name}: expected exit 1, got ${code}"
+  [[ "$err" == "$want" ]] || fail "${name}: unexpected output: ${err}"
+  no_secret "$name" "$err"
+  [[ -z "$(out_cmd "$out" 'find /out -type f')" ]] || fail "${name}: a refused input wrote a file"
+  n=$((n + 1))
+  printf 'ok: subscriptions %s refused: %s\n' "$name" "$err"
+}
+# sub_ok <name> <dir> <volume> [env...]: exit 0 and stdout is only the done line; no secret shown.
+sub_ok() {
+  local name=$1 dir=$2 out=$3 msg err
+  shift 3
+  msg=$(run_init "$dir" "$out" "$@" 2>"$work/err") || fail "${name}: secrets-init refused the input: $(cat "$work/err")"
+  err=$(cat "$work/err")
+  [[ "$msg" == "secrets-init: files mode done" && -z "$err" ]] || fail "${name}: unexpected output"
+  no_secret "$name" "$msg$err"
+}
+
+# on, valid inputs, no password: three files 0400 1000:1000 with the values without newline.
+new_volume out
+sub_ok "on" "$(sub_input subok)" "$out" "${sub_env[@]}"
+[[ "$(out_cmd "$out" 'cat /out/status/subscriptions-token')" == "$sub_token" ]] || fail "on: status token differs"
+[[ "$(out_cmd "$out" 'cat /out/notify/subscriptions-token')" == "$sub_token" ]] || fail "on: notify token differs"
+[[ "$(out_cmd "$out" 'cat /out/notify/subscriptions-key')" == "$sub_key" ]] || fail "on: notify key differs"
+[[ "$(out_cmd "$out" 'stat -c "%a %u:%g" /out/status/subscriptions-token /out/notify/subscriptions-token /out/notify/subscriptions-key | sort -u')" == "400 1000:1000" ]] ||
+  fail "on: the files are not 400 1000:1000"
+out_cmd "$out" '[ ! -e /out/notify/subscriptions-smtp-password ]' || fail "on: a password was written without input"
+[[ -z "$(out_cmd "$out" 'ls -A /out/status /out/notify | grep tmp || true')" ]] || fail "on: a temp file is left"
+n=$((n + 1))
+echo "ok: subscriptions on writes the token to status and notify and the key to notify, 400 1000:1000"
+
+# off, unset: no subscription file, also with a 0644 password and no subscription inputs.
+offdir=$(multi_input suboff "probe-token-eu=$eu_token")
+pw_file "$offdir" 644 '%s\n' "$pw"
+for sw in PULSE_SECRETS_SUBSCRIPTIONS=off ""; do
+  new_volume out
+  sub_ok "switch '${sw:-unset}'" "$offdir" "$out" PULSE_PROBE_LOCATIONS=eu MAKE_STATUS=1 MAKE_NOTIFY=1 ${sw:+"$sw"}
+  for f in $sub_files; do out_cmd "$out" "[ ! -e $f ]" || fail "switch ${sw:-unset}: wrote $f"; done
+  n=$((n + 1))
+  echo "ok: subscriptions ${sw:-unset}: no subscription file read or written, a 0644 password ignored"
+done
+
+sub_refused "switch yes" "$(sub_input subyes)" "secrets-init: PULSE_SECRETS_SUBSCRIPTIONS: must be on or off" \
+  PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_SUBSCRIPTIONS=yes MAKE_STATUS=1 MAKE_NOTIFY=1
+sub_refused "generate mode" - "secrets-init: PULSE_SECRETS_SUBSCRIPTIONS: files mode only" \
+  PULSE_SECRETS_MODE=generate PULSE_SECRETS_SUBSCRIPTIONS=on MAKE_STATUS=1 MAKE_NOTIFY=1
+sub_refused "missing token" "$(multi_input submiss "probe-token-eu=$eu_token" "subscriptions-key=$sub_key")" \
+  "secrets-init: /in/subscriptions-token: is missing; run scripts/init-secrets.sh" "${sub_env[@]}"
+sub_refused "missing key" "$(multi_input submissk "probe-token-eu=$eu_token" "subscriptions-token=$sub_token")" \
+  "secrets-init: /in/subscriptions-key: is missing; run scripts/init-secrets.sh" "${sub_env[@]}"
+sub_refused "63 characters" "$(multi_input sub63 "probe-token-eu=$eu_token" "subscriptions-token=${sub_token:1}" "subscriptions-key=$sub_key")" \
+  "secrets-init: /in/subscriptions-token: must hold 64 lowercase hex characters" "${sub_env[@]}"
+sub_refused "upper case" "$(multi_input subup "probe-token-eu=$eu_token" "subscriptions-token=$sub_token" "subscriptions-key=${sub_key^^}")" \
+  "secrets-init: /in/subscriptions-key: must hold 64 lowercase hex characters" "${sub_env[@]}"
+sub_refused "token equal to key" "$(multi_input subeq "probe-token-eu=$eu_token" "subscriptions-token=$sub_token" "subscriptions-key=$sub_token")" \
+  "secrets-init: /in/subscriptions-key: must differ from every token and key" "${sub_env[@]}"
+sub_refused "token equal to the probe token" "$(multi_input subprobe "probe-token-eu=$eu_token" "subscriptions-token=$eu_token" "subscriptions-key=$sub_key")" \
+  "secrets-init: /in/subscriptions-token: must differ from every token and key" "${sub_env[@]}"
+sub_refused "key equal to the console key" \
+  "$(multi_input subck "probe-token-eu=$eu_token" "admin-token=$admin_token" "console-secret-key=$key" "subscriptions-token=$sub_token" "subscriptions-key=$key")" \
+  "secrets-init: /in/subscriptions-key: must differ from every token and key" "${sub_env[@]}" PULSE_SECRETS_ADMIN=on MAKE_CONSOLE=1
+sub_refused "no /out/status" "$(sub_input subnost)" "secrets-init: /out/status: is not mounted" \
+  PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_SUBSCRIPTIONS=on MAKE_NOTIFY=1
+sub_refused "no /out/notify" "$(sub_input subnono)" "secrets-init: /out/notify: is not mounted" \
+  PULSE_PROBE_LOCATIONS=eu PULSE_SECRETS_SUBSCRIPTIONS=on MAKE_STATUS=1
+
+# SMTP password present (0600): exact content plus newline, 400 1000:1000. Then absent on the same
+# volume: the copy is removed, the token and key stay.
+pwdir=$(sub_input subpw)
+pw_file "$pwdir" 600 '%s\n' "$pw"
+printf '%s\n' "$pw" >"$work/expect-pw"
+new_volume out
+sub_ok "password present" "$pwdir" "$out" "${sub_env[@]}"
+[[ "$(out_cmd "$out" 'stat -c "%a %u:%g" /out/notify/subscriptions-smtp-password')" == "400 1000:1000" ]] ||
+  fail "password present: not 400 1000:1000"
+out_cmd "$out" 'cat /out/notify/subscriptions-smtp-password' >"$work/got-pw"
+cmp -s "$work/got-pw" "$work/expect-pw" || fail "password present: the copy differs"
+n=$((n + 1))
+echo "ok: subscriptions password present: copied 400 1000:1000 with one newline"
+rm "$pwdir/subscriptions-smtp-password"
+sub_ok "password removed" "$pwdir" "$out" "${sub_env[@]}"
+out_cmd "$out" '[ ! -e /out/notify/subscriptions-smtp-password ]' || fail "password removed: the stale copy stays"
+out_cmd "$out" '[ -f /out/notify/subscriptions-token ] && [ -f /out/notify/subscriptions-key ] && [ -f /out/status/subscriptions-token ]' ||
+  fail "password removed: the token or key is gone"
+echo "ok: subscriptions password absent after present: the copy is removed, token and key stay"
+
+# 512 characters and inner spaces are accepted.
+long=$(sub_input sub512)
+pw_file "$long" 600 '%s\n' "$(printf 'a b%.0s' {1..170})ab"
+new_volume out
+sub_ok "512 characters" "$long" "$out" "${sub_env[@]}"
+[[ "$(out_cmd "$out" 'wc -c </out/notify/subscriptions-smtp-password')" == "513" ]] || fail "512 characters: wrong length"
+n=$((n + 1))
+echo "ok: subscriptions password of 512 characters with inner spaces accepted"
+
+# Refused passwords: <name>|<mode>|<printf format>|<rule>. Each writes no subscription file.
+pw_rule="secrets-init: /in/subscriptions-smtp-password: must be one line of 1 to 512 characters without leading or trailing spaces"
+for c in "mode 0640|640|%s\n|secrets-init: /in/subscriptions-smtp-password: mode 0640 allows group or other access; run chmod 600" \
+  "mode 0604|604|%s\n|secrets-init: /in/subscriptions-smtp-password: mode 0604 allows group or other access; run chmod 600" \
+  "empty|600||$pw_rule" "only a newline|600|\n|$pw_rule" "two lines|600|%s\nx\n|$pw_rule" \
+  "a CR|600|pw-e2e\rSecret 42!\n|$pw_rule" "a NUL|600|pw-e2e\0Secret 42!\n|$pw_rule" \
+  "a leading space|600| %s\n|$pw_rule" "a trailing tab|600|%s\t\n|$pw_rule"; do
+  IFS='|' read -r name mode format want <<<"$c"
+  dir=$(sub_input "subpw-${name// /-}")
+  if [[ "$format" == *%s* ]]; then pw_file "$dir" "$mode" "$format" "$pw"; else pw_file "$dir" "$mode" "$format"; fi
+  sub_refused "password ${name}" "$dir" "$want" "${sub_env[@]}"
+done
+dir=$(sub_input subpw513)
+pw_file "$dir" 600 '%s\n' "$(printf 'a%.0s' {1..513})"
+sub_refused "password of 513 characters" "$dir" "$pw_rule" "${sub_env[@]}"
+dir=$(sub_input subpweq)
+pw_file "$dir" 600 '%s\n' "$sub_token"
+sub_refused "password equal to the token" "$dir" \
+  "secrets-init: /in/subscriptions-smtp-password: must differ from every token and key" "${sub_env[@]}"
+dir=$(sub_input subpwlink)
+printf '%s\n' "$pw" >"$dir/real" && chmod 600 "$dir/real" && ln -s real "$dir/subscriptions-smtp-password"
+sub_refused "password symlink" "$dir" "secrets-init: /in/subscriptions-smtp-password: is a symlink; use a regular file" "${sub_env[@]}"
+dir=$(sub_input subpwdir)
+mkdir -m 700 "$dir/subscriptions-smtp-password"
+sub_refused "password directory" "$dir" "secrets-init: /in/subscriptions-smtp-password: is not a regular file" "${sub_env[@]}"
 
 # Every volume made by a case is tracked here, so cleanup removes it (none leaks).
 ((${#volumes[@]} == n)) || fail "cleanup tracks ${#volumes[@]} volumes, expected ${n}"

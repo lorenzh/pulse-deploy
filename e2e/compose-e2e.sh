@@ -1119,6 +1119,15 @@ else
   echo "ok: console probe locations"
 fi
 
+step "Email subscriptions"
+if [[ "$E2E_SETUP" == full ]]; then
+  # The published status and notify have no subscriptions yet.
+  echo "skip: email subscriptions (published images)"
+else
+  E2E_ADMIN_TOKEN="$e2e_admin_token" bash e2e/subscriptions.sh "$api_port" "$status_port" ||
+    fail "email subscriptions"
+fi
+
 step "Persistence across down and up"
 docker compose down
 assert_volume api-data

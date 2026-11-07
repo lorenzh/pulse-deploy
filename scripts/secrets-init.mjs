@@ -12,6 +12,9 @@
 // Console key: when /out/console exists, files mode copies /in/console-secret-key (64 lowercase hex
 // characters, not equal to any token) to /out/console/secret-key; generate mode keeps a valid
 // /out/console/secret-key, creates a missing one and refuses an invalid one without replacing it.
+// Subscriptions (PULSE_SECRETS_SUBSCRIPTIONS=on, files mode only): copies /in/subscriptions-token to
+// /out/status and /out/notify, /in/subscriptions-key to /out/notify, and the optional
+// /in/subscriptions-smtp-password to /out/notify. A missing password removes an earlier copy.
 import { chmodSync, chownSync, closeSync, lstatSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -95,6 +98,58 @@ function adminEnabled(env) {
   fail("PULSE_SECRETS_ADMIN", "must be on or off");
 }
 
+function subscriptionsEnabled(env) {
+  const value = env.PULSE_SECRETS_SUBSCRIPTIONS;
+  if (value === undefined || value === "off") return false;
+  if (value === "on") return true;
+  fail("PULSE_SECRETS_SUBSCRIPTIONS", "must be on or off");
+}
+
+const SMTP_PASSWORD_FILE = "/in/subscriptions-smtp-password";
+const SMTP_PASSWORD_OUT = "/out/notify/subscriptions-smtp-password";
+const SMTP_PASSWORD_RULE = "must be one line of 1 to 512 characters without leading or trailing spaces";
+
+/** Reads the optional SMTP password: undefined when the file is missing. Never names the value. */
+function readSmtpPassword() {
+  try {
+    lstatSync(SMTP_PASSWORD_FILE);
+  } catch (err) {
+    if (err?.code === "ENOENT") return undefined;
+    fail(SMTP_PASSWORD_FILE, "cannot be read");
+  }
+  const raw = readHostFile(SMTP_PASSWORD_FILE);
+  const value = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
+  if (value.length < 1 || value.length > 512 || /[\r\n\0]/.test(value) || /^[ \t]|[ \t]$/.test(value)) {
+    fail(SMTP_PASSWORD_FILE, SMTP_PASSWORD_RULE);
+  }
+  return value;
+}
+
+/**
+ * Validates the subscription inputs against every token and key read in this run, adds their writes,
+ * and returns whether a stale SMTP password copy must be removed after the writes.
+ */
+function subscriptions(secrets, writes) {
+  const token = secretKeyOf(readHostFile("/in/subscriptions-token"));
+  if (token === undefined) fail("/in/subscriptions-token", SECRET_KEY_RULE);
+  if (secrets.includes(token)) fail("/in/subscriptions-token", "must differ from every token and key");
+  const key = secretKeyOf(readHostFile("/in/subscriptions-key"));
+  if (key === undefined) fail("/in/subscriptions-key", SECRET_KEY_RULE);
+  if (key === token || secrets.includes(key)) fail("/in/subscriptions-key", "must differ from every token and key");
+  const password = readSmtpPassword();
+  if (password !== undefined && (password === token || password === key || secrets.includes(password))) {
+    fail(SMTP_PASSWORD_FILE, "must differ from every token and key");
+  }
+  for (const dir of ["/out/status", "/out/notify"]) {
+    if (!isDirectory(dir)) fail(dir, "is not mounted");
+  }
+  writes.push(["/out/status/subscriptions-token", token]);
+  writes.push(["/out/notify/subscriptions-token", token]);
+  writes.push(["/out/notify/subscriptions-key", key]);
+  if (password !== undefined) writes.push([SMTP_PASSWORD_OUT, `${password}\n`]);
+  return password === undefined;
+}
+
 function isDirectory(path) {
   try {
     return lstatSync(path).isDirectory();
@@ -106,6 +161,7 @@ function isDirectory(path) {
 /** Reads and validates every input before the first write, so a refused run writes no file. */
 function filesMode(env) {
   const admin = adminEnabled(env);
+  const subs = subscriptionsEnabled(env);
   const list = env.PULSE_PROBE_LOCATIONS;
   const entries = [];
   const writes = [];
@@ -138,10 +194,13 @@ function filesMode(env) {
     const key = secretKeyOf(readHostFile(file));
     if (key === undefined) fail(file, SECRET_KEY_RULE);
     if (tokens.includes(key)) fail(file, "must differ from every token");
+    tokens.push(key);
     writes.push(["/out/console/secret-key", key]);
   }
+  const removeSmtpPassword = subs && subscriptions(tokens, writes);
   writeSecret("/out/api/tokens.json", tokensJson(entries));
   for (const [file, content] of writes) writeSecret(file, content);
+  if (removeSmtpPassword) rmSync(SMTP_PASSWORD_OUT, { force: true });
 }
 
 function existingToken(file) {
@@ -166,6 +225,7 @@ function adminJson(token) {
 
 function generateMode(env) {
   const admin = adminEnabled(env);
+  if (subscriptionsEnabled(env)) fail("PULSE_SECRETS_SUBSCRIPTIONS", "files mode only");
   if (admin && !isDirectory("/out/console")) fail("PULSE_SECRETS_ADMIN", "generate mode needs /out/console");
   const locations = (env.PULSE_DEMO_LOCATIONS || "eu,us").split(",").map((l) => l.trim());
   const entries = [];

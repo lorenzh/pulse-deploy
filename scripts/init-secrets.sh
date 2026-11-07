@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# init-secrets.sh [--dir <dir>]: create the host secrets directory (mode 0700) and three random
+# init-secrets.sh [--dir <dir>]: create the host secrets directory (mode 0700) and five random
 # values, each mode 0600: the probe token <dir>/probe-token and the console admin token
-# <dir>/admin-token, and the console encryption key <dir>/console-secret-key. Each is created on its own; an existing token is never overwritten.
+# <dir>/admin-token, and the console encryption key <dir>/console-secret-key, and the subscription values <dir>/subscriptions-token and
+# <dir>/subscriptions-key. Each is created on its own; an existing token is never overwritten.
 # Default directory: secrets/ at the repository root. Prints the path, never the value.
 set -euo pipefail
 
@@ -53,3 +54,7 @@ make_token probe-token
 make_token admin-token
 # The console encryption key: same format (64 lowercase hex characters and a newline).
 make_token console-secret-key
+# Email subscriptions: the status-to-notify token and the notify signing key, same format.
+# The optional SMTP password is the operator's own and is never created here.
+make_token subscriptions-token
+make_token subscriptions-key

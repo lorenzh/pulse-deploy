@@ -60,6 +60,12 @@ expect_fail "console on all interfaces in full" 5 \
   "sed -i 's/\"127.0.0.1:\${PULSE_CONSOLE_PORT:-8082}:8082\"/\"\${PULSE_CONSOLE_PORT:-8082}:8082\"/' full/compose.yaml"
 expect_fail "mailpit published in full" 5 \
   "sed -i '/^services:/a\\  mailpit:\\n    extends: { file: ../common/services.yaml, service: mailpit }\\n    ports: [\"127.0.0.1:8025:8025\"]' full/compose.yaml"
+expect_fail "mailpit on all interfaces in the subscriptions overlay" 5 \
+  "sed -i 's/\"127.0.0.1:\${PULSE_MAILPIT_PORT:-8025}:8025\"/\"0.0.0.0:\${PULSE_MAILPIT_PORT:-8025}:8025\"/' e2e/compose.subscriptions.yaml"
+expect_fail "a published notify port in the full subscriptions override" 5 \
+  "sed -i '/^  notify:/a\\    ports: [\"127.0.0.1:9300:9300\"]' full/subscriptions.example.yaml"
+expect_fail "a subscriptions secrets volume below /run/pulse" 8 \
+  "sed -i 's#notify-secrets:/run/pulse:ro#notify-secrets:/run/pulse/x:ro#' e2e/compose.subscriptions.yaml"
 # Only the dev base with the e2e overlay reads dev/.env for E2E_DEV_API_PORT: dev alone and full
 # with the overlay keep their ports, so only the e2e-dev row of rule 5 can catch this.
 expect_fail "another api port in dev with the e2e overlay" 5 \

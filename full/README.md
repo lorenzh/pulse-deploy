@@ -70,6 +70,37 @@ Copy `.env.example` to `full/.env` and uncomment a line to change it. Compose re
 | `PULSE_CONSOLE_PORT` | `8082`       | Host port of the console, always on `127.0.0.1`. Not passed into the container.            |
 | `PULSE_CONSOLE_PUBLIC_URL` | empty  | Public origin of the console behind a TLS reverse proxy. Empty: loopback mode.             |
 
+| `PULSE_STATUS_PUBLIC_URL` | unset | Read only by the email subscriptions override (below): the public root origin of the status page, for example `https://status.example.com`. |
+
+## Email subscriptions
+
+Visitors of the status page can subscribe to incident mails. The feature is off by default. To turn it on:
+
+1. `scripts/init-secrets.sh` creates `secrets/subscriptions-token` and `secrets/subscriptions-key`. It never creates the SMTP password.
+2. Copy `full/subscriptions.example.yaml` to `full/compose.override.yaml` (gitignored). Edit the lines marked `edit`: the contact `PULSE_STATUS_SUBSCRIPTIONS_CONTACT`, the sender, and a real SMTP server with TLS `starttls` or `tls`.
+3. Set `PULSE_STATUS_PUBLIC_URL` in `full/.env`. The override gives this one value to status and to notify, so the links in the mails and the page cannot differ.
+4. SMTP login: write the password to `secrets/subscriptions-smtp-password` with mode `0600`, for example `(umask 077; cat > secrets/subscriptions-smtp-password)` with the password on standard input, so it is not in the shell history. Never put it in the override or in `.env`. `secrets-init` copies it to notify. A server without login: delete the two lines marked `login` and do not create the file. Deleting the file and the `login` lines turns login off at the next `up`. With the `login` lines and no file, notify exits with code 2 and names `PULSE_NOTIFY_SUBSCRIPTIONS_SMTP_PASSWORD_FILE`; it never sends without login by mistake.
+5. Start with `docker compose -f full/compose.yaml -f full/compose.override.yaml up -d`.
+
+Root hosting: subscriptions need the status page at the root of its origin. With subscriptions on, status refuses a `PULSE_STATUS_PUBLIC_URL` whose path, after removing a trailing `/`, is not empty: exit `2` with the line `PULSE_STATUS_PUBLIC_URL: must be an origin without a path when subscriptions are on (root hosting)`.
+
+Operator duties:
+
+- Answer the contact address. Visitors use it to ask about their data or to have it deleted without a link.
+- Delete an address on request. Notify must be stopped, because the command holds the store lock:
+
+  ```sh
+  docker compose -f full/compose.yaml -f full/compose.override.yaml stop notify
+  docker compose -f full/compose.yaml -f full/compose.override.yaml run --rm --no-deps notify bun --no-env-file src/index.ts subscribers delete <address>
+  docker compose -f full/compose.yaml -f full/compose.override.yaml start notify
+  ```
+
+  It prints `deleted 1` or `deleted 0`. A delete does not remove mail already sent or copies in backups.
+- The store holds addresses: it is personal data and lives only in the `notify-data` volume. Back that volume up and protect the backups like it. Keep backups for a stated time, for example 30 days, and delete them after it. Restoring an old copy brings back rows that later unsubscribed.
+- Keep `secrets/subscriptions-key`. A new key breaks the unsubscribe links of every mail already sent.
+
+The console does not show subscribers.
+
 ## Console: first-run setup and sign-in
 
 The console keeps its local accounts and sessions in the volume `console-data` (`/data`). It reads the admin token from `console-secrets` (`/run/pulse/admin-token`), which `secrets-init` copies from `secrets/admin-token`. The api gets the same token in `/run/pulse/admin-tokens.json` and imports it once.

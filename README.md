@@ -59,11 +59,12 @@ The install directory works with plain `docker compose` too. Install, the prompt
 
 No setup holds a token, password or secret. The probe token and the console admin token live in host files:
 
-1. `scripts/init-secrets.sh [--dir <dir>]` creates `secrets/` (mode `0700`) and writes `secrets/probe-token`, `secrets/admin-token` and `secrets/console-secret-key`: each 32 random bytes as 64 lowercase hex characters and a newline, mode `0600`. Each file is created on its own; an existing file is never overwritten. It prints the paths, never a value. `secrets/` is in `.gitignore`. An existing `full` or `dev` install: run it once more to add `admin-token` and `console-secret-key`; `secrets-init` refuses to start without them.
+1. `scripts/init-secrets.sh [--dir <dir>]` creates `secrets/` (mode `0700`) and writes `secrets/probe-token`, `secrets/admin-token`, `secrets/console-secret-key`, `secrets/subscriptions-token` and `secrets/subscriptions-key`: each 32 random bytes as 64 lowercase hex characters and a newline, mode `0600`. Each file is created on its own; an existing file is never overwritten. It prints the paths, never a value. `secrets/` is in `.gitignore`. An existing `full` or `dev` install: run it once more to add `admin-token` and `console-secret-key`; `secrets-init` refuses to start without them. Run it again to add the two subscription files; they are read only when email subscriptions are on. It never creates `secrets/subscriptions-smtp-password`: that is the operator's SMTP password.
 2. At each start the one-shot service `secrets-init` reads `secrets/probe-token` through a read-only bind mount and copies it into per-consumer named volumes, owned by the container user `bun` (uid 1000) with mode `0400`:
    - `api-secrets`, mounted read-only at `/run/pulse` in the api: `tokens.json` = `{"tokens":[{"location":<PULSE_LOCATION>,"token":<token>}]}`;
    - `probe-secrets`, mounted read-only at `/run/pulse` in the probe: `probe-token`;
    - in `full`, `dev` and `demo` (`PULSE_SECRETS_ADMIN=on`): `admin-tokens.json` = `{"tokens":[{"name":"admin","token":<admin token>}]}` in `api-secrets`, and `admin-token` and `secret-key` (from `secrets/console-secret-key`, without its newline) in `console-secrets`, mounted read-only at `/run/pulse` in the console. The console reads the key through `PULSE_CONSOLE_SECRET_KEY_FILE=/run/pulse/secret-key`.
+   - with `PULSE_SECRETS_SUBSCRIPTIONS=on` (files mode only; unset or `off` reads and writes nothing for subscriptions): `subscriptions-token` (from `secrets/subscriptions-token`, without its newline) in `status-secrets` and `notify-secrets`, and `subscriptions-key` in `notify-secrets`. Both volumes must be mounted at `/out/status` and `/out/notify`, else it fails with `/out/status: is not mounted`. The optional `secrets/subscriptions-smtp-password` (written by the operator, mode `0600`) is copied to `notify-secrets` as the value and one newline. When the host file is missing, no password is written, and a copy from an earlier run is removed after the other writes.
 3. api, probe and console start only after `secrets-init` has exited with code 0.
 
 `secrets-init` refuses, with one line on stderr that names the file and the rule (never the content):
@@ -72,6 +73,11 @@ No setup holds a token, password or secret. The probe token and the console admi
 - a mode with any group or other bit (`0644`, `0640`): run `chmod 600`;
 - an empty token, a token shorter than 16 characters, with spaces or other non-printable characters, or the placeholder `replace-with-…`;
 - with the console: a missing `console-secret-key` (`is missing; run scripts/init-secrets.sh`), one that is not exactly 64 lowercase hex characters after one trailing newline, or one equal to a token (`must differ from every token`).
+- with subscriptions on: a missing `subscriptions-token` or `subscriptions-key`, one that is not exactly 64 lowercase hex characters after one trailing newline, or one equal to the other or to any token or key (`must differ from every token and key`);
+- with subscriptions on and a `subscriptions-smtp-password`: a symlink, a non-regular file, a group or other mode bit, a value that is not one line of 1 to 512 characters after one trailing newline, or has a CR, NUL, or leading or trailing space or tab, or one equal to a token or key;
+- `PULSE_SECRETS_SUBSCRIPTIONS` other than `on` or `off` (`must be on or off`), and `on` in generate mode (`files mode only`).
+
+Every input is checked before the first write, so a refused run writes no file.
 
 ### Console secret key
 
@@ -102,6 +108,8 @@ Nothing else is published. `scripts/check-setup.sh` enforces this table.
 | full    | status `${PULSE_STATUS_PORT:-8080}` → 8080 on all interfaces; console `127.0.0.1:${PULSE_CONSOLE_PORT:-8082}` → 8082                                           |
 | demo    | status `127.0.0.1:${PULSE_STATUS_PORT:-8080}` → 8080; console `127.0.0.1:${PULSE_CONSOLE_PORT:-8082}` → 8082; mailpit `127.0.0.1:${PULSE_MAILPIT_PORT:-8025}` → 8025 |
 | dev     | as full, plus api `127.0.0.1:${PULSE_API_PORT:-3000}` → 3000                                                                                                  |
+
+The test-only subscription overlay `e2e/compose.subscriptions.yaml` adds mailpit `127.0.0.1:${PULSE_MAILPIT_PORT:-8025}` → 8025 to the e2e stack. The `full` override `full/subscriptions.example.yaml` publishes nothing.
 
 The api is published only in `minimal` (which has no status page), in `dev` and in the e2e overlay, always on loopback. In `full` the status page serves a filtered, read-only subset of the api.
 
@@ -138,7 +146,9 @@ The step `Manual incident privacy` runs when `GET /admin/manual-incidents` answe
 
 The step `Console probe locations` runs only on `dev` (`e2e/console-probes.sh`). On `full` it prints `skip: console probe locations (published images)`. It sets up the console owner with TOTP and adds the locations `e2e-run` and `e2e-compose` (network `pulse-e2e_default`). It runs the rendered snippets with `snippet_run`: in a `mktemp -d` directory, without `COMPOSE_PROJECT_NAME`, `COMPOSE_FILE`, `COMPOSE_PROFILES`, `COMPOSE_ENV_FILES` and `COMPOSE_PATH_SEPARATOR`. `node e2e/snippet.mjs <file> <pre id>` reads a snippet from the page. Each probe must report within one interval: an answer of `GET /locations` that finished by `t0 + 10000` ms and holds `lastResultAt >= t0`. For the rotation, `t0` is taken after the old container is gone, and a baseline answer must show `lastResultAt < t0`. It revokes `e2e-compose` (`401`, history kept), scans the logs and the console database files for the probe secrets, and checks that the stack's `probe` container never changes. The trap removes the snippet probes before the teardown. The step ends with `ok: console probe locations`. `bash e2e/snippet.test.sh` tests the decoder and the wait.
 
-The CI job `e2e-dev` checks out the `main` of the five services, prints their revisions, and runs `E2E_SETUP=dev bash e2e/compose-e2e.sh`. It fails without the lines `ok: manual incident privacy` and `ok: console probe locations`, so a skip cannot pass there. The `full` job runs on the published images and may take the skip.
+The step `Email subscriptions` runs only on `dev` (`e2e/subscriptions.sh`, with the overlay `e2e/compose.subscriptions.yaml` and mailpit). On `full` it prints `skip: email subscriptions (published images)`. It subscribes six addresses, confirms two, checks that every subscribe answer is the same and takes at least 2 s below and at the capacity limit, sends public incidents and checks each mail count with a metric barrier (`settle`), checks that drafts, notes and internal incidents send nothing, unsubscribes, restarts notify, deletes an address with `subscribers delete`, checks hostile requests and that a path in the public URL is refused, and scans the logs. It restores the regular status and notify and ends with `ok: email subscriptions`. `bash e2e/subscriptions.test.sh` tests its helpers on fixed inputs and the config of the overlay and of `full/subscriptions.example.yaml`.
+
+The CI job `e2e-dev` checks out the `main` of the five services, prints their revisions, and runs `E2E_SETUP=dev bash e2e/compose-e2e.sh`. It fails without the lines `ok: manual incident privacy`, `ok: console probe locations` and `ok: email subscriptions`, so a skip cannot pass there. The `full` job runs on the published images and may take the skip.
 
 `bash e2e/console-setup.sh dev/compose.yaml` tests the console first-run setup on a running `dev` stack with fresh volumes, after `scripts/wait-ready.sh`. It reads the setup code from the console log, creates the owner `e2e-owner@example.com` with a random password, tests the api connection, signs in, recreates the console, and checks that the setup is closed and the account stays. Last, it scans the console database files for the admin token and expects no match. It prints only `ok:` lines, never a token, code, password, setup key or recovery code. It needs curl, jq and node.
 
