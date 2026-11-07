@@ -59,11 +59,12 @@ The install directory works with plain `docker compose` too. Install, the prompt
 
 No setup holds a token, password or secret. The probe token and the console admin token live in host files:
 
-1. `scripts/init-secrets.sh [--dir <dir>]` creates `secrets/` (mode `0700`) and writes `secrets/probe-token`, `secrets/admin-token` and `secrets/console-secret-key`: each 32 random bytes as 64 lowercase hex characters and a newline, mode `0600`. Each file is created on its own; an existing file is never overwritten. It prints the paths, never a value. `secrets/` is in `.gitignore`. An existing `full` or `dev` install: run it once more to add `admin-token` and `console-secret-key`; `secrets-init` refuses to start without them.
+1. `scripts/init-secrets.sh [--dir <dir>]` creates `secrets/` (mode `0700`) and writes `secrets/probe-token`, `secrets/admin-token`, `secrets/console-secret-key`, `secrets/subscriptions-token` and `secrets/subscriptions-key`: each 32 random bytes as 64 lowercase hex characters and a newline, mode `0600`. Each file is created on its own; an existing file is never overwritten. It prints the paths, never a value. `secrets/` is in `.gitignore`. An existing `full` or `dev` install: run it once more to add `admin-token` and `console-secret-key`; `secrets-init` refuses to start without them. Run it again to add the two subscription files; they are read only when email subscriptions are on. It never creates `secrets/subscriptions-smtp-password`: that is the operator's SMTP password.
 2. At each start the one-shot service `secrets-init` reads `secrets/probe-token` through a read-only bind mount and copies it into per-consumer named volumes, owned by the container user `bun` (uid 1000) with mode `0400`:
    - `api-secrets`, mounted read-only at `/run/pulse` in the api: `tokens.json` = `{"tokens":[{"location":<PULSE_LOCATION>,"token":<token>}]}`;
    - `probe-secrets`, mounted read-only at `/run/pulse` in the probe: `probe-token`;
    - in `full`, `dev` and `demo` (`PULSE_SECRETS_ADMIN=on`): `admin-tokens.json` = `{"tokens":[{"name":"admin","token":<admin token>}]}` in `api-secrets`, and `admin-token` and `secret-key` (from `secrets/console-secret-key`, without its newline) in `console-secrets`, mounted read-only at `/run/pulse` in the console. The console reads the key through `PULSE_CONSOLE_SECRET_KEY_FILE=/run/pulse/secret-key`.
+   - with `PULSE_SECRETS_SUBSCRIPTIONS=on` (files mode only; unset or `off` reads and writes nothing for subscriptions): `subscriptions-token` (from `secrets/subscriptions-token`, without its newline) in `status-secrets` and `notify-secrets`, and `subscriptions-key` in `notify-secrets`. Both volumes must be mounted at `/out/status` and `/out/notify`, else it fails with `/out/status: is not mounted`. The optional `secrets/subscriptions-smtp-password` (written by the operator, mode `0600`) is copied to `notify-secrets` as the value and one newline. When the host file is missing, no password is written, and a copy from an earlier run is removed after the other writes.
 3. api, probe and console start only after `secrets-init` has exited with code 0.
 
 `secrets-init` refuses, with one line on stderr that names the file and the rule (never the content):
@@ -72,6 +73,11 @@ No setup holds a token, password or secret. The probe token and the console admi
 - a mode with any group or other bit (`0644`, `0640`): run `chmod 600`;
 - an empty token, a token shorter than 16 characters, with spaces or other non-printable characters, or the placeholder `replace-with-…`;
 - with the console: a missing `console-secret-key` (`is missing; run scripts/init-secrets.sh`), one that is not exactly 64 lowercase hex characters after one trailing newline, or one equal to a token (`must differ from every token`).
+- with subscriptions on: a missing `subscriptions-token` or `subscriptions-key`, one that is not exactly 64 lowercase hex characters after one trailing newline, or one equal to the other or to any token or key (`must differ from every token and key`);
+- with subscriptions on and a `subscriptions-smtp-password`: a symlink, a non-regular file, a group or other mode bit, a value that is not one line of 1 to 512 characters after one trailing newline, or has a CR, NUL, or leading or trailing space or tab, or one equal to a token or key;
+- `PULSE_SECRETS_SUBSCRIPTIONS` other than `on` or `off` (`must be on or off`), and `on` in generate mode (`files mode only`).
+
+Every input is checked before the first write, so a refused run writes no file.
 
 ### Console secret key
 
