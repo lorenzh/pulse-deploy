@@ -165,10 +165,45 @@ expect_fail "release 1.999 fails" release_ok 1.999
 expect_pass "release 2.000 passes" release_ok 2.000
 expect_pass "release 2.350 passes" release_ok 2.350
 
+# --- subscribe_answer measures the first byte ------------------------------------------------
+# A local server: /early sends the status line and headers at once and the body after 2.1 s;
+# /late waits 2.1 s before the first byte.
+cat >"$tmp/srv.py" <<'PY'
+import http.server, sys, time
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if self.path == "/late":
+            time.sleep(2.1)
+        self.send_response(200)
+        self.send_header("Content-Length", "4")
+        self.end_headers()
+        self.wfile.flush()
+        if self.path == "/early":
+            time.sleep(2.1)
+        self.wfile.write(b"done")
+    def log_message(self, *a):
+        pass
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+print(s.server_address[1], flush=True)
+s.serve_forever()
+PY
+coproc SRV { exec python3 -I "$tmp/srv.py"; }
+read -r srv_port <&"${SRV[0]}"
+timed_release() { subscribe_answer "$tmp/$1" sub-a@e2e.invalid "http://127.0.0.1:${srv_port}/$1" && release_ok "$(cat "$tmp/$1.t")"; }
+expect_fail "headers at once with a body after 2.1 s fail the release check" timed_release early
+expect_pass "a first byte after 2.1 s passes the release check" timed_release late
+kill "$SRV_PID" 2>/dev/null
+
 # --- Notice matcher -----------------------------------------------------------------------------
 page() {
   printf '%s\n' '<form id="subscribe" action="/subscribe" method="post"><input name="email" type="email"></form>' \
-    '<div id="subscribe-notice">' "${NOTICE_LINES[@]}" "Questions: ${CONTACT_LINK}" '</div>'
+    '<div id="subscribe-notice">' \
+    'If you do not confirm, we delete all of it within 25 hours of the last confirmation email.' \
+    'After you confirm, we keep it until you unsubscribe.' \
+    'Every email has an unsubscribe link. It deletes your address and these records at once, also from emails that are waiting to be sent.' \
+    'One email that is being sent at that moment can still arrive.' \
+    'Questions: <a href="mailto:privacy@e2e.invalid">privacy@e2e.invalid</a>' '</div>'
 }
 page >"$tmp/page"
 expect_pass "the notice matcher accepts the full page" notice_ok "$tmp/page"
@@ -178,6 +213,8 @@ page | grep -vF 'One email that is being sent' >"$tmp/page"
 expect_fail "the notice matcher rejects a missing one-email sentence" notice_ok "$tmp/page"
 page | grep -vF 'Questions:' >"$tmp/page"
 expect_fail "the notice matcher rejects a missing contact" notice_ok "$tmp/page"
+page | sed 's/we keep it until you unsubscribe/we keep it forever/' >"$tmp/page"
+expect_fail "the notice matcher rejects a changed retention sentence" notice_ok "$tmp/page"
 
 printf '%s passed, %s failed\n' "$pass" "$failures"
 ((failures == 0))

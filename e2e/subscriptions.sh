@@ -250,18 +250,23 @@ post_token() {
   [[ "$code" == "$3" ]] || fail "POST $1 answered ${code}, expected $3"
 }
 
-# subscribe_answer <prefix> <address>: POST /subscribe with the hostile header set of 5a.
-# <prefix>.t gets the larger of curl's time_starttransfer and the wall time around curl. curl's
-# own timer can read about 1 % low under WSL2, so a correct 2 s release may show as 1.97 s there;
-# the wall time is never shorter than the real wait, so the check stays a lower bound.
+# subscribe_answer <prefix> <address> [url]: POST /subscribe with the hostile header set of 5a.
+# <prefix>.t gets the wall time from before curl starts until the first response byte reaches
+# the shell (the status line, read from curl's header stream). A body that arrives later does
+# not count. The value includes a few ms of curl start-up, so it never undercuts the real wait.
 subscribe_answer() {
-  local t0 t1 st
+  local t0 t1 url=${3:-"http://127.0.0.1:${status_port}/subscribe"}
   t0=$EPOCHREALTIME
-  st=$(curl -sS --max-time 20 -D "$1.h" -o "$1.b" -w '%{time_starttransfer}' -H "Origin: ${PUBLIC_URL}" \
-    -H 'Host: evil.example' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: https' \
-    --data-urlencode "email=$2" "http://127.0.0.1:${status_port}/subscribe")
-  t1=$EPOCHREALTIME
-  awk -v a="$t0" -v b="$t1" -v s="$st" 'BEGIN { w = b - a; printf "%.6f\n", (s + 0 > w) ? s : w }' >"$1.t"
+  t1=$(
+    curl -sS -N --max-time 20 -D - -o "$1.b" -H "Origin: ${PUBLIC_URL}" \
+      -H 'Host: evil.example' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: https' \
+      --data-urlencode "email=$2" "$url" | {
+      IFS= read -r first || true
+      printf '%s\n' "$EPOCHREALTIME"
+      { printf '%s\n' "$first"; cat; } >"$1.h"
+    }
+  )
+  awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.6f\n", b - a }' >"$1.t"
 }
 
 wait_healthy() {
