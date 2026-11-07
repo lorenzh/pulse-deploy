@@ -51,6 +51,10 @@ ro_backup=""
 created_secrets=0
 # The work directory of e2e/console-probes.sh; the trap removes its snippet probes first.
 probe_work=""
+# The owner directory (owner.env of the console Owner) and the work directory of
+# e2e/console-incidents.sh; the trap removes both.
+owner_dir=""
+incidents_work=""
 
 step() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -92,6 +96,8 @@ cleanup() {
     bash e2e/console-probes.sh cleanup "$probe_work"
     rm -rf "$probe_work"
   fi
+  [[ -z "$owner_dir" ]] || rm -rf "$owner_dir"
+  [[ -z "$incidents_work" ]] || rm -rf "$incidents_work"
   printf '\n==> Teardown\n'
   if ! docker compose down -v --remove-orphans && ((code == 0)); then
     code=1
@@ -1101,8 +1107,10 @@ if [[ "$E2E_SETUP" == full ]]; then
 else
   probe_work=$(mktemp -d)
   chmod 700 "$probe_work"
+  owner_dir=$(mktemp -d)
+  chmod 700 "$owner_dir"
   probe_log=$(mktemp)
-  if ! bash e2e/console-probes.sh run "$probe_work" "$api_port" "$console_port" >"$probe_log" 2>&1; then
+  if ! bash e2e/console-probes.sh run "$probe_work" "$api_port" "$console_port" "$owner_dir" >"$probe_log" 2>&1; then
     cat "$probe_log"
     rm -f "$probe_log"
     fail "console probe locations"
@@ -1117,6 +1125,31 @@ else
   rm -rf "$probe_work"
   probe_work=""
   echo "ok: console probe locations"
+fi
+
+step "Console incidents and maintenance"
+if [[ "$E2E_SETUP" == full ]]; then
+  # The published console has no incident and maintenance screens yet.
+  echo "skip: console incidents and maintenance (published images)"
+else
+  incidents_work=$(mktemp -d)
+  chmod 700 "$incidents_work"
+  incidents_log=$(mktemp)
+  incidents_code=0
+  E2E_ADMIN_TOKEN="$e2e_admin_token" bash e2e/console-incidents.sh run "$incidents_work" \
+    "$owner_dir" "$api_port" "$status_port" "$console_port" >"$incidents_log" 2>&1 || incidents_code=$?
+  # No owner credential may reach the step output: scan it before it is printed.
+  hits=$(grep -c -F -f <(sed -n 's/^\(password\|setup_key\)=//p' "$owner_dir/owner.env") "$incidents_log" || true)
+  if [[ "$hits" != 0 ]]; then
+    rm -f "$incidents_log"
+    fail "console incidents and maintenance: a credential is in the step output"
+  fi
+  cat "$incidents_log"
+  rm -f "$incidents_log"
+  ((incidents_code == 0)) || fail "console incidents and maintenance"
+  rm -rf "$incidents_work" "$owner_dir"
+  incidents_work=""
+  owner_dir=""
 fi
 
 step "Email subscriptions"

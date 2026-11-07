@@ -50,6 +50,7 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 | console-setup form tokens (stub curl, docker, node) | `bash e2e/console-setup.test.sh` |
 | Snippet decoder and one-interval wait | `bash e2e/snippet.test.sh` |
 | dev console probe prefills | `bash e2e/dev-console-prefills.test.sh` |
+| Incident card extractor (literal fixtures) | `bash e2e/incident-card.test.sh` |
 | Static setup checks | `scripts/check-setup.sh` |
 | Static checks reject broken setups | `bash scripts/check-setup.test.sh` |
 | secrets-init tests (Docker) | `bash scripts/secrets-init.test.sh` |
@@ -62,7 +63,7 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 | End-to-end test of `full` (about 4 min) | `bash e2e/compose-e2e.sh` |
 | End-to-end test of `dev` (builds from the sibling checkouts) | `E2E_SETUP=dev bash e2e/compose-e2e.sh` |
 
-CI (`.github/workflows/ci.yml`) runs the jobs `lint`, `pins`, `minimal`, `full` (readiness, then the end-to-end test), `demo`, `dev` (built from each service's `main`, also daily, then `cli/test/stack.sh dev`), `e2e-dev` (the end-to-end test on `dev` built from each service's `main`; it requires `ok: manual incident privacy` and `ok: console probe locations`), `cli-build` (on ubuntu-24.04, ubuntu-24.04-arm and macos-15), `cli-render`, `cli-stack` (demo, full, minimal), `cli-errors` and, on Monday schedules, `pins-latest`. `release.yml` publishes the CLI binaries on a `v*` tag. Run every check of a job that your change touches before handoff, shellcheck from the repository root so `source=` paths resolve.
+CI (`.github/workflows/ci.yml`) runs the jobs `lint`, `pins`, `minimal`, `full` (readiness, then the end-to-end test), `demo`, `dev` (built from each service's `main`, also daily, then `cli/test/stack.sh dev`), `e2e-dev` (the end-to-end test on `dev` built from each service's `main`; it requires `ok: manual incident privacy`, `ok: console probe locations` and `ok: console incidents and maintenance`), `cli-build` (on ubuntu-24.04, ubuntu-24.04-arm and macos-15), `cli-render`, `cli-stack` (demo, full, minimal), `cli-errors` and, on Monday schedules, `pins-latest`. `release.yml` publishes the CLI binaries on a `v*` tag. Run every check of a job that your change touches before handoff, shellcheck from the repository root so `source=` paths resolve.
 
 ## Documentation
 

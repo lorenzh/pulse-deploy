@@ -53,6 +53,8 @@ jobs:
         run: bash e2e/snippet.test.sh
       - name: dev console probe prefills (compose config)
         run: bash e2e/dev-console-prefills.test.sh
+      - name: Incident card extractor test
+        run: bash e2e/incident-card.test.sh
       - name: email subscriptions helpers and override config
         run: bash e2e/subscriptions.test.sh
       - name: Static setup checks
@@ -306,6 +308,7 @@ jobs:
           E2E_SETUP=dev bash e2e/compose-e2e.sh | tee e2e-dev.log
           grep -qx 'ok: manual incident privacy' e2e-dev.log
           grep -qx 'ok: console probe locations' e2e-dev.log
+          grep -qx 'ok: console incidents and maintenance' e2e-dev.log
           grep -qx 'ok: email subscriptions' e2e-dev.log
       - name: Teardown
         if: always()
