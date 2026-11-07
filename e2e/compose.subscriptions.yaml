@@ -1,0 +1,58 @@
+# TEST ONLY. Email subscriptions with mailpit, merged after the base file and e2e/compose.e2e.yaml
+# by e2e/subscriptions.sh only: COMPOSE_FILE=<base>:e2e/compose.e2e.yaml:e2e/compose.subscriptions.yaml.
+# Never part of a user setup; full/subscriptions.example.yaml is the operator's override.
+# Relative paths resolve from full/ or dev/, the directory of the first file. No image line here.
+# No subscriptions-smtp-password and no login settings: mailpit takes mail without login.
+services:
+  secrets-init:
+    environment:
+      PULSE_SECRETS_SUBSCRIPTIONS: "on"
+    volumes:
+      - status-secrets:/out/status
+      - notify-secrets:/out/notify
+
+  mailpit:
+    extends: { file: ../common/services.yaml, service: mailpit }
+    ports:
+      - "127.0.0.1:${PULSE_MAILPIT_PORT:-8025}:8025"
+
+  status:
+    environment:
+      # PULSE_STATUS_PUBLIC_URL stays http://status.e2e.invalid from e2e/compose.e2e.yaml (a root origin).
+      PULSE_STATUS_SUBSCRIPTIONS_URL: http://notify:9300
+      PULSE_STATUS_SUBSCRIPTIONS_TOKEN_FILE: /run/pulse/subscriptions-token
+      PULSE_STATUS_SUBSCRIPTIONS_CONTACT: privacy@e2e.invalid
+    volumes:
+      - status-secrets:/run/pulse:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      notify:
+        condition: service_started
+
+  notify:
+    environment:
+      PULSE_NOTIFY_SUBSCRIPTIONS: "on"
+      PULSE_NOTIFY_SUBSCRIPTIONS_STATUS_URL: http://status.e2e.invalid
+      PULSE_NOTIFY_SUBSCRIPTIONS_FROM: pulse e2e <status@e2e.invalid>
+      PULSE_NOTIFY_SUBSCRIPTIONS_SMTP_HOST: mailpit
+      PULSE_NOTIFY_SUBSCRIPTIONS_SMTP_PORT: "1025"
+      PULSE_NOTIFY_SUBSCRIPTIONS_SMTP_TLS: none
+      PULSE_NOTIFY_SUBSCRIPTIONS_TOKEN_FILE: /run/pulse/subscriptions-token
+      PULSE_NOTIFY_SUBSCRIPTIONS_KEY_FILE: /run/pulse/subscriptions-key
+      PULSE_NOTIFY_SUBSCRIPTIONS_STATE: /data/notify-subscriptions.db
+      PULSE_NOTIFY_RETRY_DELAY_MS: "500"
+      # Six addresses reach the capacity limit. MAX_PENDING must not exceed MAX.
+      PULSE_NOTIFY_SUBSCRIPTIONS_MAX: "5"
+      PULSE_NOTIFY_SUBSCRIPTIONS_MAX_PENDING: "5"
+    volumes:
+      - notify-secrets:/run/pulse:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+
+volumes:
+  status-secrets:
+  notify-secrets:
