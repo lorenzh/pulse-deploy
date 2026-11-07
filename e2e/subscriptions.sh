@@ -223,7 +223,7 @@ mail_text() {
 }
 
 # link_of <text> <path>: the path and query of the first link to <path>.
-link_of() { grep -oE "${PUBLIC_URL//./\\.}${1}\?token=[A-Za-z0-9_-]+" <<<"$2" | head -n 1 | sed "s#^${PUBLIC_URL}##"; }
+link_of() { grep -oE "${PUBLIC_URL//./\\.}${1}\?token=[A-Za-z0-9_.-]+" <<<"$2" | head -n 1 | sed "s#^${PUBLIC_URL}##"; }
 
 token_of() { printf '%s\n' "${1#*token=}"; }
 
@@ -394,7 +394,10 @@ main() {
   local etext
   etext=$(mail_text sub-e@e2e.invalid '')
   grep -qF evil.example <<<"$etext" && fail "E's mail holds the forged host"
-  if grep -oE 'https?://[^ ]+' <<<"$etext" | grep -vq "^${PUBLIC_URL}/"; then fail "E's mail has a link outside ${PUBLIC_URL}/"; fi
+  # Every link is the configured origin (the status page line) or a path below it.
+  if grep -oE 'https?://[^[:space:]]+' <<<"$etext" | sed -E 's/[.,]$//' | grep -vqE "^${PUBLIC_URL//./\\.}(/|$)"; then
+    fail "E's mail has a link outside ${PUBLIC_URL}"
+  fi
   expect_count sub-a@e2e.invalid '' 1 "messages to A after 5a"
   expect_count sub-d@e2e.invalid '' 1 "messages to D after 5a"
   ok "5a: three equal 200 answers (each >= 2.000 s, no echo, contact link); confirmations 5; known +2, queued +1"
