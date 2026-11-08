@@ -1138,7 +1138,42 @@ else
   echo "ok: console probe locations"
 fi
 
+step "Console incidents and maintenance"
+if [[ "$E2E_SETUP" == full ]]; then
+  # The published console has no incident and maintenance screens yet.
+  echo "skip: console incidents and maintenance (published images)"
+else
+  incidents_work=$(mktemp -d)
+  chmod 700 "$incidents_work"
+  incidents_log=$(mktemp)
+  incidents_code=0
+  E2E_ADMIN_TOKEN="$e2e_admin_token" bash e2e/console-incidents.sh run "$incidents_work" \
+    "$owner_dir" "$api_port" "$status_port" "$console_port" >"$incidents_log" 2>&1 || incidents_code=$?
+  # No owner credential may reach the step output: scan it before it is printed.
+  hits=$(grep -c -F -f <(sed -n 's/^\(password\|setup_key\)=//p' "$owner_dir/owner.env") "$incidents_log" || true)
+  if [[ "$hits" != 0 ]]; then
+    rm -f "$incidents_log"
+    fail "console incidents and maintenance: a credential is in the step output"
+  fi
+  cat "$incidents_log"
+  rm -f "$incidents_log"
+  ((incidents_code == 0)) || fail "console incidents and maintenance"
+  rm -rf "$incidents_work"
+  incidents_work=""
+fi
+
+step "Email subscriptions"
+if [[ "$E2E_SETUP" == full ]]; then
+  # The published status and notify have no subscriptions yet.
+  echo "skip: email subscriptions (published images)"
+else
+  E2E_ADMIN_TOKEN="$e2e_admin_token" bash e2e/subscriptions.sh "$api_port" "$status_port" ||
+    fail "email subscriptions"
+fi
+
 step "Runtime settings"
+# After the subscriptions check: this step recreates status and notify, and the subscriptions
+# check measures the status answer time on its own recreated services.
 if [[ "$E2E_SETUP" == full ]]; then
   # The published status, notify and console have no runtime settings yet.
   echo "skip: runtime settings (published images)"
@@ -1165,43 +1200,10 @@ else
   ((runtime_code == 0)) || fail "runtime settings"
   [[ -s "$runtime_work/status-token" && -s "$runtime_work/notify-token" ]] ||
     fail "runtime settings: want 2 service tokens"
-  rm -rf "$runtime_work"
+  rm -rf "$runtime_work" "$owner_dir"
   runtime_work=""
-  echo "ok: runtime settings"
-fi
-
-step "Console incidents and maintenance"
-if [[ "$E2E_SETUP" == full ]]; then
-  # The published console has no incident and maintenance screens yet.
-  echo "skip: console incidents and maintenance (published images)"
-else
-  incidents_work=$(mktemp -d)
-  chmod 700 "$incidents_work"
-  incidents_log=$(mktemp)
-  incidents_code=0
-  E2E_ADMIN_TOKEN="$e2e_admin_token" bash e2e/console-incidents.sh run "$incidents_work" \
-    "$owner_dir" "$api_port" "$status_port" "$console_port" >"$incidents_log" 2>&1 || incidents_code=$?
-  # No owner credential may reach the step output: scan it before it is printed.
-  hits=$(grep -c -F -f <(sed -n 's/^\(password\|setup_key\)=//p' "$owner_dir/owner.env") "$incidents_log" || true)
-  if [[ "$hits" != 0 ]]; then
-    rm -f "$incidents_log"
-    fail "console incidents and maintenance: a credential is in the step output"
-  fi
-  cat "$incidents_log"
-  rm -f "$incidents_log"
-  ((incidents_code == 0)) || fail "console incidents and maintenance"
-  rm -rf "$incidents_work" "$owner_dir"
-  incidents_work=""
   owner_dir=""
-fi
-
-step "Email subscriptions"
-if [[ "$E2E_SETUP" == full ]]; then
-  # The published status and notify have no subscriptions yet.
-  echo "skip: email subscriptions (published images)"
-else
-  E2E_ADMIN_TOKEN="$e2e_admin_token" bash e2e/subscriptions.sh "$api_port" "$status_port" ||
-    fail "email subscriptions"
+  echo "ok: runtime settings"
 fi
 
 step "Persistence across down and up"
