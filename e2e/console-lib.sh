@@ -10,20 +10,53 @@
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "ok: $*"; }
 
+# shellcheck source=e2e/redact.sh
+source e2e/redact.sh
+
+# needles_from_response: record the cookies of $jar, the Set-Cookie values of $headers, every csrf
+# and form_token value and every recovery code of $body in the registry E2E_NEEDLES. Prints
+# nothing; returns 1 when an append fails. Without E2E_NEEDLES it records nothing.
+needles_from_response() {
+  [[ -n "${E2E_NEEDLES:-}" ]] || return 0
+  local vals=() v
+  if [[ -f "$jar" ]]; then
+    while IFS= read -r v; do vals+=("$v"); done < <(awk -F '\t' '
+      /^#HttpOnly_/ { sub(/^#HttpOnly_/, "") } /^#/ { next } NF >= 7 { print $7 }' "$jar" 2>/dev/null)
+  fi
+  if [[ -f "$headers" ]]; then
+    while IFS= read -r v; do
+      v=${v%%;*}
+      vals+=("$v")
+      [[ "$v" != *=* ]] || vals+=("${v#*=}")
+    done < <(tr -d '\r' <"$headers" 2>/dev/null | sed -n 's/^[Ss][Ee][Tt]-[Cc][Oo][Oo][Kk][Ii][Ee]:[ \t]*//p')
+  fi
+  if [[ -f "$body" ]]; then
+    while IFS= read -r v; do vals+=("$v"); done < <(
+      grep -o 'name="\(csrf\|form_token\)" value="[^"]*"' "$body" 2>/dev/null |
+        sed 's/.* value="\([^"]*\)"$/\1/'
+      grep -o '[0-9a-f][0-9a-f][0-9a-f][0-9a-f]\(-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]\)\{7\}' "$body" 2>/dev/null)
+  fi
+  ((${#vals[@]} == 0)) || needle_add "${vals[@]}"
+}
+
 # req <method> <path> [curl data args...]: prints the status; body and headers go to files.
 req() {
   local method=$1 path=$2
   shift 2
   local extra=()
   [[ "$method" == POST ]] && extra=(-H "Origin: $origin")
+  local rc=0
   curl -sS -o "$body" -D "$headers" -w '%{http_code}' -b "$jar" -c "$jar" \
-    -X "$method" "${extra[@]}" "$@" "$base$path"
+    -X "$method" "${extra[@]}" "$@" "$base$path" || rc=$?
+  needles_from_response || fail "needle registry: append failed"
+  return "$rc"
 }
 location() { tr -d '\r' <"$headers" | sed -n 's/^[Ll]ocation: //p' | tail -n 1; }
 csrf() {
   local v
   v=$(sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' "$body" | head -n 1)
   [[ -n "$v" ]] || fail "$1: no csrf field"
+  needle_add "$v" || fail "needle registry: append failed"
   printf '%s' "$v"
 }
 # form_token_args <path>: sets the array ftok to the form_token field of the first form in the last
@@ -47,6 +80,7 @@ form_token_args() {
         exit
       }
     }' "$body")
+  [[ -z "$v" ]] || needle_add "$v" || fail "needle registry: append failed"
   [[ -z "$v" ]] || ftok=(--data-urlencode "form_token=$v")
 }
 expect() { # expect <step> <want> <got>
@@ -81,6 +115,8 @@ totp_after() {
   while :; do
     line=$(node e2e/totp.mjs "$setup_key") || fail "$1: e2e/totp.mjs failed"
     [[ "$line" =~ ^([0-9]+)\ ([0-9]{6})$ ]] || fail "$1: e2e/totp.mjs output"
+    needle_add "${BASH_REMATCH[2]}" || fail "needle registry: append failed"
+    [[ "$line" =~ ^([0-9]+)\ ([0-9]{6})$ ]]
     if ((BASH_REMATCH[1] > $2)); then
       totp_step=${BASH_REMATCH[1]}
       totp_code=${BASH_REMATCH[2]}
@@ -139,6 +175,7 @@ console_owner_signed_in() {
   s=$(req GET /account/authenticator)
   expect "$p GET /account/authenticator" 200 "$s"
   setup_key=$(tr -d '\n' <"$body" | sed -n 's/.*id="totp-secret"[^>]*>\([^<]*\)<.*/\1/p' | tr -d ' ')
+  [[ -z "$setup_key" ]] || needle_add "$setup_key" || fail "needle registry: append failed"
   [[ "$setup_key" =~ ^[A-Z2-7]{32}$ ]] || fail "$p: #totp-secret is not 32 base32 characters"
   token=$(csrf "$p pending")
   form_token_args /account/authenticator

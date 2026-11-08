@@ -52,6 +52,7 @@ cat >"$work/bin/curl" <<'STUB'
 # Stub of curl: a fake pulse console. State lives in $FAKE_STATE, the cookie jar names the session.
 # FAKE_FLOW: legacy or two-factor. FAKE_LAYOUT: pr9, around, none or mixed.
 # FAKE_FAIL=sign-out-all: POST /account/sessions/sign-out-all answers 500.
+# FAKE_FAIL=confirm: POST /account/authenticator action=confirm answers 500.
 set -uo pipefail
 st=$FAKE_STATE
 out=/dev/null hdr="" fmt="" jin="" jout="" method=GET url=""
@@ -102,6 +103,7 @@ has_token() {
 declare -A ptok=()
 form() { # form <action> <inner html>: sets fhtml to one form, a fresh token per action and page.
   local f='<form method="post" action="'$1'"><input type="hidden" name="csrf" value="'$csrf'">'
+  echo "$csrf" >>"$st/csrf-issued"
   if has_token "$1"; then
     if [[ -z "${ptok[$1]:-}" ]]; then
       ptok[$1]=$(rand)
@@ -218,6 +220,7 @@ if [[ "$method" == POST ]]; then
       case "${field[action]:-}" in
         new) touch "$st/key"; reply 303 /account/authenticator ;;
         confirm)
+          [[ "${FAKE_FAIL:-}" == confirm ]] && reply 500
           [[ -f "$st/key" ]] && totp_ok || { auth_page; reply 401; }
           touch "$st/enrolled"
           set_auth signed
@@ -316,16 +319,25 @@ skipped="ok: 8b replay check skipped: console without form_token"
 passed=0 failed=0
 case_fail() { echo "FAIL: $name: $*"; failed=$((failed + 1)); }
 
-# run_case <name> <flow> <layout> <fail> <exit>: runs the script with fresh fake state. It checks
-# the exit code first and reports the script's own FAIL: line, then the secret scan and the log.
+# run_case <name> <flow> <layout> <fail> <exit> <registry>: runs the script with fresh fake state.
+# <registry> "supplied": E2E_NEEDLES is a fresh mode 600 file in a mode 700 directory; "private":
+# no E2E_NEEDLES and an empty TMPDIR. It checks the exit code first and reports the script's own
+# FAIL: line, then the secret scan, the log and the registry.
 run_case() {
   name=$1
   local st="$work/state-$((passed + failed))"
-  mkdir -p "$st/s"
+  mkdir -p "$st/s" "$st/tmp"
   touch "$st/requests" "$st/tokens"
+  local reg=""
+  if [[ "$6" == supplied ]]; then
+    mkdir -p "$st/reg"
+    chmod 700 "$st/reg"
+    (umask 077; : >"$st/reg/needles")
+    reg="$st/reg/needles"
+  fi
   code=0
   PATH="$work/bin:$PATH" FAKE_STATE=$st FAKE_FLOW=$2 FAKE_LAYOUT=$3 FAKE_FAIL=$4 \
-    E2E_CONSOLE_FLOW=$2 timeout 120 bash "$script" "$root/dev/compose.yaml" \
+    E2E_CONSOLE_FLOW=$2 E2E_NEEDLES="$reg" TMPDIR="$st/tmp" timeout 120 bash "$script" "$root/dev/compose.yaml" \
     >"$st/stdout" 2>"$st/stderr" || code=$?
   log="$st/requests"
   out="$st/stdout" err="$st/stderr"
@@ -361,6 +373,37 @@ run_case() {
     case_fail "a form_token not issued for the path of its POST"
     return 1
   fi
+  if [[ "$6" == private ]]; then
+    # The private registry and the work directory are gone, also after a failure.
+    if [[ -n "$(ls -A "$st/tmp")" ]]; then
+      case_fail "the private registry or work directory is left in TMPDIR"
+      return 1
+    fi
+    return 0
+  fi
+  # The supplied registry is kept, mode 600, valid, and holds every value the fake issued or took.
+  if [[ ! -f "$reg" || "$(stat -c %a "$reg")" != 600 || -e "$reg.invalid" ]]; then
+    case_fail "the supplied registry is removed, not mode 600 or invalid"
+    return 1
+  fi
+  local v missing=0
+  while IFS= read -r v; do
+    [[ -z "$v" ]] || grep -qxF -- "$v" "$reg" || missing=1
+  done < <(
+    cat "$st/csrf-issued"
+    cut -d ' ' -f 1 "$st/tokens"
+    cat "$st/password"; echo
+    if [[ "$2" == two-factor ]]; then
+      cat "$st/totp-issued"
+      # A failed confirm never shows the recovery codes.
+      [[ "$4" == confirm ]] || printf '%s' "$recovery_codes"
+      echo "$setup_key"
+    fi
+  )
+  if ((missing != 0)); then
+    case_fail "a credential the fake issued or took is not in the registry"
+    return 1
+  fi
   return 0
 }
 check_out() { # check_out <expected stdout>: stdout equals the literal list.
@@ -372,25 +415,25 @@ check_out() { # check_out <expected stdout>: stdout equals the literal list.
 pass() { echo "ok: $name"; passed=$((passed + 1)); }
 count() { grep -c "$1" "$log" || true; }
 
-if run_case "A: two-factor/pr9" two-factor pr9 "" 0; then
+if run_case "A: two-factor/pr9" two-factor pr9 "" 0 supplied; then
   check_out "$(expected_two_factor)" && pass
 fi
 
-if run_case "B: two-factor/around" two-factor around "" 0; then
+if run_case "B: two-factor/around" two-factor around "" 0 supplied; then
   check_out "$(expected_two_factor)" && pass
 fi
 
-if run_case "C: legacy/around" legacy around "" 0; then
+if run_case "C: legacy/around" legacy around "" 0 supplied; then
   check_out "$(expected_legacy "$replayed")" && pass
 fi
 
-if run_case "D: legacy/none" legacy none "" 0; then
+if run_case "D: legacy/none" legacy none "" 0 private; then
   if check_out "$(expected_legacy "$skipped")"; then
     if [[ "$(count 'form_token')" != 0 ]]; then case_fail "a form_token field in a POST"; else pass; fi
   fi
 fi
 
-if run_case "E: legacy/mixed" legacy mixed "" 0; then
+if run_case "E: legacy/mixed" legacy mixed "" 0 supplied; then
   if check_out "$(expected_legacy "$skipped")"; then
     if [[ "$(count '^POST /sign-in .*form_token')" != 0 ]]; then
       case_fail "a form_token on POST /sign-in"
@@ -398,13 +441,22 @@ if run_case "E: legacy/mixed" legacy mixed "" 0; then
   fi
 fi
 
-if run_case "F: two-factor/pr9 sign-out-all 500" two-factor pr9 sign-out-all 1; then
+if run_case "F: two-factor/pr9 sign-out-all 500" two-factor pr9 sign-out-all 1 private; then
   if ! grep -qxF "FAIL: step 11 sign out all: status 500, want 303" "$err"; then
     case_fail "stderr lacks the step 11 status 500 line"
   else pass; fi
 fi
 
-if run_case "G: two-factor/mixed" two-factor mixed "" 0; then
+# H: confirm fails after the setup key was read. The registry must already hold the key.
+if run_case "H: two-factor/pr9 confirm 500" two-factor pr9 confirm 1 supplied; then
+  if ! grep -qxF "FAIL: step 8 action=confirm: status 500, want 200" "$err"; then
+    case_fail "stderr lacks the step 8 confirm status 500 line"
+  elif ! grep -qxF "$setup_key" "$work/state-$((passed + failed))/reg/needles"; then
+    case_fail "the registry lacks the setup key after a failed confirm"
+  else pass; fi
+fi
+
+if run_case "G: two-factor/mixed" two-factor mixed "" 0 supplied; then
   if check_out "$(expected_two_factor)"; then
     if [[ "$(count '^POST /sign-in .*form_token')" != 0 ]]; then
       case_fail "a form_token on POST /sign-in"
