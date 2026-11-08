@@ -228,6 +228,10 @@ jobs:
           ref: main
           path: pulse-console
           persist-credentials: false
+      - name: Needle registry
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/e2e-needles"
+          install -m 600 /dev/null "$RUNNER_TEMP/e2e-needles/needles"
       - working-directory: pulse-deploy
         run: scripts/init-secrets.sh
       - working-directory: pulse-deploy
@@ -236,17 +240,21 @@ jobs:
         run: scripts/wait-ready.sh dev/compose.yaml 900
       - name: Console setup, sign-in and recreation
         working-directory: pulse-deploy
+        env:
+          E2E_NEEDLES: ${{ runner.temp }}/e2e-needles/needles
         run: bash e2e/console-setup.sh dev/compose.yaml
       - name: Stack state and logs
         if: failure()
         working-directory: pulse-deploy
-        run: |
-          docker compose -f dev/compose.yaml ps --all
-          docker compose -f dev/compose.yaml logs --no-color
+        env:
+          E2E_NEEDLES: ${{ runner.temp }}/e2e-needles/needles
+        run: bash e2e/failure-logs.sh dev/compose.yaml
       - name: Teardown
         if: always()
         working-directory: pulse-deploy
-        run: docker compose -f dev/compose.yaml down -v --remove-orphans
+        run: |
+          rm -rf "$RUNNER_TEMP/e2e-needles"
+          docker compose -f dev/compose.yaml down -v --remove-orphans
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.0

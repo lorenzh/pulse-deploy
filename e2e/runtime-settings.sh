@@ -132,6 +132,9 @@ form_args() {
   local i
   for i in "${!order[@]}"; do
     [[ -n "${seen[${order[$i]}]:-}" ]] && continue
+    case ${order[$i]} in
+      csrf | form_token) needle_add "${values[$i]}" || fail "needle registry: append failed" ;;
+    esac
     fargs+=(--data-urlencode "${order[$i]}=${values[$i]}")
   done
   for pair in "${sets[@]}"; do fargs+=(--data-urlencode "$pair"); done

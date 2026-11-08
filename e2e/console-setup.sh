@@ -28,8 +28,26 @@ api_url=http://api:3000
 source e2e/console-lib.sh
 dc() { docker compose -f "$compose_file" "$@"; }
 
+# setup_exit: on exit, check the needle registry before $work (which may hold it) is removed. A
+# run that passed with a registry that became invalid fails.
+setup_exit() {
+  local code=$? valid=0
+  needles_valid || valid=1
+  rm -rf "$work"
+  if ((code == 0 && valid != 0)); then
+    echo "FAIL: needle registry: collection failed; diagnostics suppressed" >&2
+    exit 1
+  fi
+  exit "$code"
+}
+
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+trap setup_exit EXIT
+# Without a supplied registry, record into a private one that setup_exit removes with $work.
+if [[ -z "${E2E_NEEDLES:-}" ]]; then
+  (umask 077; : >"$work/needles")
+  export E2E_NEEDLES="$work/needles"
+fi
 jar="$work/cookies"
 body="$work/body"
 headers="$work/headers"
@@ -46,6 +64,7 @@ checks_expected=$(jq '.checks | length' full/config/api/checks.json)
 # The owner password: 12 random bytes as 24 hex characters.
 password=$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')
 [[ ${#password} -eq 24 ]] || fail "password generation"
+needle_add "$password" || fail "needle registry: append failed"
 # 1. The setup code: the last code line of the console log.
 code=$(dc logs --no-color console 2>/dev/null |
   sed -n 's/.*pulse-console setup code: \([^ ]*\).*/\1/p' | tail -n 1)
@@ -169,6 +188,9 @@ if [[ "$flow" == two-factor ]]; then
   expect "step 8 action=confirm" 200 "$status"
   tr -d '\n' <"$body" | sed -n 's/.*<ol id="recovery-codes"[^>]*>\(.*\)<\/ol>.*/\1/p' |
     grep -oE '[0-9a-f]{4}(-[0-9a-f]{4}){7}' >"$secrets_file" || true
+  needle_add "$setup_key" || fail "needle registry: append failed"
+  mapfile -t recorded <"$secrets_file"
+  ((${#recorded[@]} == 0)) || needle_add "${recorded[@]}" || fail "needle registry: append failed"
   n=$(sort -u "$secrets_file" | wc -l)
   [[ "$n" -eq 10 && "$(wc -l <"$secrets_file")" -eq 10 ]] ||
     fail "step 8: #recovery-codes does not hold 10 distinct codes"

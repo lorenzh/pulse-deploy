@@ -8,6 +8,10 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # shellcheck source=e2e/redact.sh
 source e2e/redact.sh
+# The needle registry of this run (see e2e/redact.sh). Never an inherited one: it is created right
+# after the trap, exported to the scenarios, and removed at the end of cleanup.
+e2e_needles_dir=""
+export E2E_NEEDLES=""
 
 # Always our own project: the teardown runs `down -v`, so an inherited
 # COMPOSE_PROJECT_NAME such as `pulse` would delete real volumes.
@@ -77,17 +81,49 @@ wait_for() {
   printf 'ok: %s\n' "$description"
 }
 
+# collect_needles <out>: write the credentials of this run to <out> (see redact_needles), also the
+# probe secrets. Returns 1, without <out>, when the needle registry is invalid.
+collect_needles() {
+  local probe_secrets=()
+  [[ -z "$probe_work" || ! -f "$probe_work/secrets" ]] || mapfile -t probe_secrets <"$probe_work/secrets"
+  redact_needles "$1" "$owner_dir" "$secrets_dir" "${e2e_admin_token:-}" "${db_svc_token:-}" \
+    "$(awk 1 "$runtime_work/status-token" "$runtime_work/notify-token" 2>/dev/null)" \
+    "${probe_secrets[@]}"
+}
+
+# replay_redacted <log>: print a captured child output with the credentials of this run masked.
+replay_redacted() {
+  local needles
+  needles=$(mktemp)
+  collect_needles "$needles"
+  redact "$needles" <"$1"
+  rm -f "$needles"
+}
+
+# print_child_log <log> <code>: print a child output; masked when the child failed or the needle
+# registry is invalid, else unchanged.
+print_child_log() {
+  if [[ "$2" != 0 ]] || ! needles_valid; then
+    replay_redacted "$1"
+  else
+    cat "$1"
+  fi
+}
+
 cleanup() {
   local code=$?
   set +e
+  if ((code == 0)) && ! needles_valid; then
+    echo "FAIL: needle registry: collection failed; diagnostics suppressed" >&2
+    code=1
+  fi
   if ((code != 0)); then
     printf '\n==> Failure (exit %s): stack state and logs\n' "$code"
     docker compose ps --all
     # The logs may hold a credential that a scan just found: print them redacted.
     local needles
     needles=$(mktemp)
-    redact_needles "$needles" "$owner_dir" "$secrets_dir" "${e2e_admin_token:-}" "${db_svc_token:-}" \
-      "$(awk 1 "$runtime_work/status-token" "$runtime_work/notify-token" 2>/dev/null)"
+    collect_needles "$needles"
     docker compose logs --no-color 2>&1 | redact "$needles"
     rm -f "$needles"
   fi
@@ -117,9 +153,14 @@ cleanup() {
   if ((created_secrets == 1)); then
     rm -rf "$secrets_dir"
   fi
+  [[ -z "$e2e_needles_dir" ]] || rm -rf "$e2e_needles_dir"
   exit "$code"
 }
 trap cleanup EXIT
+e2e_needles_dir=$(mktemp -d)
+chmod 700 "$e2e_needles_dir"
+(umask 077; : >"$e2e_needles_dir/needles")
+E2E_NEEDLES="$e2e_needles_dir/needles"
 
 service_state() { # service_state <service>
   docker compose ps --all --format json |
@@ -1122,11 +1163,11 @@ else
   chmod 700 "$owner_dir"
   probe_log=$(mktemp)
   if ! bash e2e/console-probes.sh run "$probe_work" "$api_port" "$console_port" "$owner_dir" >"$probe_log" 2>&1; then
-    cat "$probe_log"
+    print_child_log "$probe_log" 1
     rm -f "$probe_log"
     fail "console probe locations"
   fi
-  cat "$probe_log"
+  print_child_log "$probe_log" 0
   # No probe secret may reach the step output.
   hits=$(grep -c -F -f "$probe_work/secrets" "$probe_log" || true)
   rm -f "$probe_log"
@@ -1155,7 +1196,7 @@ else
     rm -f "$incidents_log"
     fail "console incidents and maintenance: a credential is in the step output"
   fi
-  cat "$incidents_log"
+  print_child_log "$incidents_log" "$incidents_code"
   rm -f "$incidents_log"
   ((incidents_code == 0)) || fail "console incidents and maintenance"
   rm -rf "$incidents_work"
@@ -1195,7 +1236,7 @@ else
     rm -f "$runtime_log"
     fail "runtime settings: a token is in the step output"
   fi
-  cat "$runtime_log"
+  print_child_log "$runtime_log" "$runtime_code"
   rm -f "$runtime_log"
   ((runtime_code == 0)) || fail "runtime settings"
   [[ -s "$runtime_work/status-token" && -s "$runtime_work/notify-token" ]] ||
