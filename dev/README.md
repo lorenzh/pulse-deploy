@@ -66,6 +66,10 @@ The console encrypts the owner's authenticator secrets with `secrets/console-sec
 
 Test the flow: with fresh volumes, after `scripts/wait-ready.sh dev/compose.yaml 900`, run `bash e2e/console-setup.sh dev/compose.yaml`. It does the setup itself, so it fails when an owner already exists. It runs the `legacy` or the `two-factor` flow, as the console answers; `E2E_CONSOLE_FLOW=legacy|two-factor` forces one. See [README.md](../README.md#end-to-end-test).
 
+## Status page and notifications from the console
+
+As in [full](../full/README.md#status-page-and-notifications-from-the-console): create a `status` and a `notify` token in the console Tokens page, write them to files, mount them read-only in a Compose override (`dev/compose.override.yaml`, gitignored), set `PULSE_STATUS_API_TOKEN_FILE`, `PULSE_NOTIFY_API_TOKEN_FILE` and the `PULSE_NOTIFY_SECRET_*` variables or `PULSE_NOTIFY_SECRET_DIR`, and recreate status and notify once with `docker compose -f dev/compose.yaml -f dev/compose.override.yaml up -d --force-recreate status notify`. `PULSE_STATUS_SHOW_CHECKS: "true"` stays, so Show checks is read-only in the console, "Set by `PULSE_STATUS_SHOW_CHECKS` on pulse-status". The end-to-end step `Runtime settings` (see the [root README](../README.md#end-to-end-test)) does this with the test-only overlay `e2e/compose.runtime.yaml`.
+
 ## Variables
 
 Copy `.env.example` to `dev/.env` and uncomment a line to change it.

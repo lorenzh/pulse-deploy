@@ -52,6 +52,7 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 | dev console probe prefills | `bash e2e/dev-console-prefills.test.sh` |
 | Incident card extractor (literal fixtures) | `bash e2e/incident-card.test.sh` |
 | Failure logs redact credentials (stub docker) | `bash e2e/redact.test.sh` |
+| Runtime settings helpers, receiver and overlay config | `bash e2e/runtime-settings.test.sh` |
 | Static setup checks | `scripts/check-setup.sh` |
 | Static checks reject broken setups | `bash scripts/check-setup.test.sh` |
 | secrets-init tests (Docker) | `bash scripts/secrets-init.test.sh` |
