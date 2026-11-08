@@ -173,6 +173,7 @@ if [[ "$flow" == two-factor ]]; then
   status=$(req GET /account/authenticator)
   expect "step 8 GET /account/authenticator" 200 "$status"
   setup_key=$(tr -d '\n' <"$body" | sed -n 's/.*id="totp-secret"[^>]*>\([^<]*\)<.*/\1/p' | tr -d ' ')
+  [[ -z "$setup_key" ]] || needle_add "$setup_key" || fail "needle registry: append failed"
   [[ "$setup_key" =~ ^[A-Z2-7]{32}$ ]] || fail "step 8: #totp-secret is not 32 base32 characters"
   token=$(csrf "step 8 pending")
   form_token_args /account/authenticator
@@ -188,7 +189,6 @@ if [[ "$flow" == two-factor ]]; then
   expect "step 8 action=confirm" 200 "$status"
   tr -d '\n' <"$body" | sed -n 's/.*<ol id="recovery-codes"[^>]*>\(.*\)<\/ol>.*/\1/p' |
     grep -oE '[0-9a-f]{4}(-[0-9a-f]{4}){7}' >"$secrets_file" || true
-  needle_add "$setup_key" || fail "needle registry: append failed"
   mapfile -t recorded <"$secrets_file"
   ((${#recorded[@]} == 0)) || needle_add "${recorded[@]}" || fail "needle registry: append failed"
   n=$(sort -u "$secrets_file" | wc -l)

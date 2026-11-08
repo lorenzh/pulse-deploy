@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2034,SC2016 # the eval'd functions read the variables of each case
+# shellcheck disable=SC2034,SC2016,SC2030,SC2031 # eval'd functions read each case's variables; cases export in subshells
 # Test of the e2e failure diagnostics: the needle registry (E2E_NEEDLES) of e2e/redact.sh, the
 # recording helpers of e2e/console-lib.sh, cleanup, replay_redacted and print_child_log of
 # e2e/compose-e2e.sh, setup_exit of e2e/console-setup.sh and e2e/failure-logs.sh. Stub docker,
@@ -638,9 +638,15 @@ w3() {
 w4() {
   reset_vars
   flogs
-  ((wrc == 2)) && [[ "$werr" == *"usage: e2e/failure-logs.sh <compose file>"* ]] || { echo "no argument: exit $wrc"; return 1; }
+  if ! ((wrc == 2)) || [[ "$werr" != *"usage: e2e/failure-logs.sh <compose file>"* ]]; then
+    echo "no argument: exit $wrc"
+    return 1
+  fi
   flogs "$tmp/no-such-compose.yaml"
-  ((wrc == 2)) && [[ "$werr" == *"usage: e2e/failure-logs.sh <compose file>"* ]] || { echo "missing file: exit $wrc"; return 1; }
+  if ! ((wrc == 2)) || [[ "$werr" != *"usage: e2e/failure-logs.sh <compose file>"* ]]; then
+    echo "missing file: exit $wrc"
+    return 1
+  fi
 }
 w5() {
   reset_vars

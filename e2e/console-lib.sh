@@ -175,6 +175,7 @@ console_owner_signed_in() {
   s=$(req GET /account/authenticator)
   expect "$p GET /account/authenticator" 200 "$s"
   setup_key=$(tr -d '\n' <"$body" | sed -n 's/.*id="totp-secret"[^>]*>\([^<]*\)<.*/\1/p' | tr -d ' ')
+  [[ -z "$setup_key" ]] || needle_add "$setup_key" || fail "needle registry: append failed"
   [[ "$setup_key" =~ ^[A-Z2-7]{32}$ ]] || fail "$p: #totp-secret is not 32 base32 characters"
   token=$(csrf "$p pending")
   form_token_args /account/authenticator

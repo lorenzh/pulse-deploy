@@ -52,6 +52,7 @@ cat >"$work/bin/curl" <<'STUB'
 # Stub of curl: a fake pulse console. State lives in $FAKE_STATE, the cookie jar names the session.
 # FAKE_FLOW: legacy or two-factor. FAKE_LAYOUT: pr9, around, none or mixed.
 # FAKE_FAIL=sign-out-all: POST /account/sessions/sign-out-all answers 500.
+# FAKE_FAIL=confirm: POST /account/authenticator action=confirm answers 500.
 set -uo pipefail
 st=$FAKE_STATE
 out=/dev/null hdr="" fmt="" jin="" jout="" method=GET url=""
@@ -219,6 +220,7 @@ if [[ "$method" == POST ]]; then
       case "${field[action]:-}" in
         new) touch "$st/key"; reply 303 /account/authenticator ;;
         confirm)
+          [[ "${FAKE_FAIL:-}" == confirm ]] && reply 500
           [[ -f "$st/key" ]] && totp_ok || { auth_page; reply 401; }
           touch "$st/enrolled"
           set_auth signed
@@ -393,7 +395,8 @@ run_case() {
     cat "$st/password"; echo
     if [[ "$2" == two-factor ]]; then
       cat "$st/totp-issued"
-      printf '%s' "$recovery_codes"
+      # A failed confirm never shows the recovery codes.
+      [[ "$4" == confirm ]] || printf '%s' "$recovery_codes"
       echo "$setup_key"
     fi
   )
@@ -441,6 +444,15 @@ fi
 if run_case "F: two-factor/pr9 sign-out-all 500" two-factor pr9 sign-out-all 1 private; then
   if ! grep -qxF "FAIL: step 11 sign out all: status 500, want 303" "$err"; then
     case_fail "stderr lacks the step 11 status 500 line"
+  else pass; fi
+fi
+
+# H: confirm fails after the setup key was read. The registry must already hold the key.
+if run_case "H: two-factor/pr9 confirm 500" two-factor pr9 confirm 1 supplied; then
+  if ! grep -qxF "FAIL: step 8 action=confirm: status 500, want 200" "$err"; then
+    case_fail "stderr lacks the step 8 confirm status 500 line"
+  elif ! grep -qxF "$setup_key" "$work/state-$((passed + failed))/reg/needles"; then
+    case_fail "the registry lacks the setup key after a failed confirm"
   else pass; fi
 fi
 
