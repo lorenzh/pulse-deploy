@@ -29,6 +29,10 @@ pulse-deploy holds every Docker Compose setup of pulse (uptime monitor and statu
 - Scripts never print a token. Error lines name the file and the rule only.
 - Do not add `.factory/`, plan or note files to this repository.
 
+## Code conventions
+
+The pulse [code conventions](https://github.com/lorenzh/pulse-meta/blob/main/docs/code-conventions.md) apply to every change, also to Compose files and scripts. Search `common/services.yaml`, `scripts/`, `e2e/` and `cli/` for an existing service block, shell function or helper before writing one, and move the second copy into a shared one. Keep CLI logic in small pure functions; Docker, files and the network stay at the edge.
+
 ## Commands
 
 | Task | Command |
