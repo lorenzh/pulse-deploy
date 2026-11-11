@@ -5,7 +5,7 @@
 # No host paths here: `depends_on`, `ports` and `volumes` live in the setup files.
 services:
   api:
-    image: ghcr.io/lorenzh/pulse-api:0.1.0@sha256:71d623fb9e51bccdfd1f235882c69c48908960ec39e1c9b565fa700777009b18
+    image: ghcr.io/lorenzh/pulse-api:0.1.1@sha256:de8ccf3432739243194954b9bcfe44ba7b185f27ad9664d40dcb82fb7a9b8da6
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -13,7 +13,7 @@ services:
       PULSE_TOKENS_FILE: /run/pulse/tokens.json
 
   probe:
-    image: ghcr.io/lorenzh/pulse-probe:0.1.0@sha256:c5cb30ec6efecd34e37a6047ba165e2eba57b95bbb2e8775c9c77753c6736871
+    image: ghcr.io/lorenzh/pulse-probe:0.1.1@sha256:4aae94e75efa0b9161deb060d547ee9163f9e6c04cb1fc501479302bda88bc76
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
