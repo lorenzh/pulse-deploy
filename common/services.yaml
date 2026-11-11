@@ -5,7 +5,7 @@
 # No host paths here: `depends_on`, `ports` and `volumes` live in the setup files.
 services:
   api:
-    image: ghcr.io/lorenzh/pulse-api:0.1.0@sha256:71d623fb9e51bccdfd1f235882c69c48908960ec39e1c9b565fa700777009b18
+    image: ghcr.io/lorenzh/pulse-api:0.1.1@sha256:de8ccf3432739243194954b9bcfe44ba7b185f27ad9664d40dcb82fb7a9b8da6
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -13,7 +13,7 @@ services:
       PULSE_TOKENS_FILE: /run/pulse/tokens.json
 
   probe:
-    image: ghcr.io/lorenzh/pulse-probe:0.1.0@sha256:c5cb30ec6efecd34e37a6047ba165e2eba57b95bbb2e8775c9c77753c6736871
+    image: ghcr.io/lorenzh/pulse-probe:0.1.1@sha256:4aae94e75efa0b9161deb060d547ee9163f9e6c04cb1fc501479302bda88bc76
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -22,7 +22,7 @@ services:
       PULSE_PROBE_TOKEN_FILE: /run/pulse/probe-token
 
   status:
-    image: ghcr.io/lorenzh/pulse-status:0.1.0@sha256:0347481776e1d511dd3bffc7c21d646b6661192e11f08997ffe54eb745e84fa4
+    image: ghcr.io/lorenzh/pulse-status:0.1.1@sha256:f4283a8cc20c5707ee22e9be3de5bb18cfe9965d62f8af964c6a7df38ad117a5
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -32,7 +32,7 @@ services:
       interval: 5s
 
   notify:
-    image: ghcr.io/lorenzh/pulse-notify:0.1.0@sha256:a63964aa2a2b728849f76b416ac5cc90b5a95306a375c028c3d4d11afe1c9e78
+    image: ghcr.io/lorenzh/pulse-notify:0.1.1@sha256:47606577e85738d28fbe5fc422476a225c7242cc45b8a672a7372e8c3ff111bf
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -41,7 +41,7 @@ services:
       PULSE_NOTIFY_CONFIG: /config/notify.json
 
   console:
-    image: ghcr.io/lorenzh/pulse-console:0.1.0@sha256:ddadc5e1eef198861731b334bee3a593e1ef29700252212a7dba9ac81087bce3
+    image: ghcr.io/lorenzh/pulse-console:0.1.1@sha256:bdf26a71637f07c0b3ecca67730ba0928100f398333d8cd9c46db5e9dfc1303a
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]

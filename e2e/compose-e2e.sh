@@ -124,7 +124,9 @@ cleanup() {
     local needles
     needles=$(mktemp)
     collect_needles "$needles"
-    docker compose logs --no-color 2>&1 | redact "$needles"
+    local logs
+    logs=$(docker compose logs --no-color 2>&1)
+    printf '%s\n' "$(role_redact "$logs")" | redact "$needles"
     rm -f "$needles"
   fi
   if [[ -n "$checks_backup" && -f "$checks_backup" ]]; then
@@ -233,11 +235,11 @@ hb_status() { # hb_status <curl args...>: print the HTTP status
 }
 
 hb_page_has_check() {
-  curl -fsS --max-time 5 "http://127.0.0.1:${status_port}/api/checks" | grep -qF 'Heartbeat e2e'
+  curl -fsS --max-time 5 "http://127.0.0.1:${status_port}/api/checks" | grep -F 'Heartbeat e2e' >/dev/null
 }
 
 notify_has() {
-  docker compose exec -T notify cat /data/incidents.jsonl | grep -qE -- "(^|[^0-9])$1"
+  docker compose exec -T notify cat /data/incidents.jsonl | grep -E -- "(^|[^0-9])$1" >/dev/null
 }
 
 # True once notify finished a good poll; that poll seeds the incidents that already exist.
@@ -256,8 +258,8 @@ hb_has_new_incident() { # hb_has_new_incident <old id>
 # The page is rendered in the browser from /api/checks, which the status
 # service proxies from the API. So the check name is not in the HTML of GET /.
 page_has_title() {
-  curl -fsS --max-time 5 "http://127.0.0.1:${status_port}/" | grep -qF 'id="checks"' &&
-    curl -fsS --max-time 5 "http://127.0.0.1:${status_port}/api/checks" | grep -qF 'Status page'
+  curl -fsS --max-time 5 "http://127.0.0.1:${status_port}/" | grep -F 'id="checks"' >/dev/null &&
+    curl -fsS --max-time 5 "http://127.0.0.1:${status_port}/api/checks" | grep -F 'Status page' >/dev/null
 }
 
 is_healthy() { # is_healthy <service>
@@ -301,6 +303,54 @@ assert_no_volume() {
 }
 
 e2e_admin_token="${E2E_ADMIN_TOKEN:-e2e-admin-token-sentinel-0123456789abcdef}"
+# The header secret of e2e-post, the same default as e2e/compose.e2e.yaml. Set before any container
+# starts, so the failure dump redacts it from the first log line on.
+e2e_token="${E2E_SVC_TOKEN:-e2e-svc-token-sentinel}"
+# The stack's probe token: read right after init-secrets.sh. The three secrets that the api issues
+# in "Tokens and audit" stay empty until it returns them.
+probe_token=""
+read_checks_secret=""
+rotated_secret_a=""
+rotated_secret_b=""
+
+# role_redact <text>: print the text with each known credential replaced, as a literal string, by
+# <redacted:role>. Empty credentials are skipped; unset ones read as empty.
+role_redact() {
+  local text=$1 pair value
+  local pairs=(
+    "e2e-admin-token=${e2e_admin_token:-}"
+    "e2e-svc-token=${e2e_token:-}"
+    "probe-token=${probe_token:-}"
+    "read-checks-secret=${read_checks_secret:-}"
+    "rotated-secret-a=${rotated_secret_a:-}"
+    "rotated-secret-b=${rotated_secret_b:-}"
+  )
+  for pair in "${pairs[@]}"; do
+    value=${pair#*=}
+    [[ -n "$value" ]] || continue
+    text=${text//"$value"/<redacted:${pair%%=*}>}
+  done
+  printf '%s' "$text"
+}
+
+# secret_absent <place> <text>: fail when the text holds a known credential; name only its role.
+secret_absent() {
+  local pair value
+  local pairs=(
+    "the e2e admin token=${e2e_admin_token:-}"
+    "the e2e svc token=${e2e_token:-}"
+    "the probe token=${probe_token:-}"
+    "the read-checks secret=${read_checks_secret:-}"
+    "the rotated secret A=${rotated_secret_a:-}"
+    "the rotated secret B=${rotated_secret_b:-}"
+  )
+  for pair in "${pairs[@]}"; do
+    value=${pair#*=}
+    [[ -n "$value" ]] || continue
+    if grep -qF -- "$value" <<<"$2"; then fail "$1 shows ${pair%%=*}"; fi
+  done
+  echo "ok: $1 shows no credential"
+}
 manual_title='<script>alert(1)</script> Checkout slow'
 escaped_title='&lt;script&gt;alert(1)&lt;/script&gt; Checkout slow'
 
@@ -329,13 +379,13 @@ proxy_shows_open_manual() {
     '.[] | select(.id == $id and .title == $t and .resolvedAt == null and .impact == "major" and .componentIds == ["web"])'
 }
 
-proxy_has_text() { proxy_manual | grep -qF -- "$1"; }
+proxy_has_text() { proxy_manual | grep -F -- "$1" >/dev/null; }
 
 proxy_shows_resolved_manual() {
   proxy_manual | jq -e --argjson id "$manual_id" '.[] | select(.id == $id and .resolvedAt != null and (.updates | length) == 3)'
 }
 
-feed_has() { status_page /feed.atom | grep -qF -- "$1"; }
+feed_has() { status_page /feed.atom | grep -F -- "$1" >/dev/null; }
 
 manual_count() { # manual_count <file> <key>: lines of a notify channel file with the key
   docker compose exec -T notify cat "/data/$1" 2>/dev/null | grep -cF -- "\"key\":\"$2\"" || true
@@ -378,7 +428,7 @@ step "Setup (project ${project})"
 for tool in docker curl jq; do
   command -v "$tool" >/dev/null || fail "$tool is required"
 done
-if ! docker compose config | grep -qx "name: ${project}"; then
+if ! docker compose config | grep -x "name: ${project}" >/dev/null; then
   fail "COMPOSE_PROJECT_NAME does not override the name in ${base_file}"
 fi
 # The regular stack must carry no e2e fixture: only the e2e files may.
@@ -400,6 +450,7 @@ fi
   mv -f "$admin_tmp" "$secrets_dir/admin-token"
 )
 scripts/init-secrets.sh --dir "$secrets_dir"
+probe_token=$(head -n 1 "$secrets_dir/probe-token")
 # Hard-coded on purpose: a list derived from the base file would accept any extra service.
 regular_services=$(docker compose -f "$base_file" config --services | sort | paste -sd' ' -)
 [[ "$regular_services" == "api console notify probe secrets-init status" ]] ||
@@ -469,7 +520,6 @@ wait_for "$T_FIRST_RESULT" "status-page has a state other than unknown" check_st
 step "Status page"
 wait_for "$T_PAGE" "GET / on port ${status_port} returns the page and /api/checks lists 'Status page'" page_has_title
 
-e2e_token="${E2E_SVC_TOKEN:-e2e-svc-token-sentinel}"
 e2e_body_sentinel="e2e-body-sentinel"
 
 post_check_reason_is() { # post_check_reason_is <text>: the lastReason of the e2e-post check
@@ -488,8 +538,10 @@ set_target_mode() { # set_target_mode <mode>
 # None of the strings may appear in the text of a response or a log.
 assert_absent() { # assert_absent <description> <text>
   local needle
+  local -A role=(["$e2e_token"]="the e2e svc token" ["$e2e_body_sentinel"]="the body sentinel"
+    [PULSE_HEADER_SVC_TOKEN]="the header env name")
   for needle in "$e2e_token" "$e2e_body_sentinel" PULSE_HEADER_SVC_TOKEN; do
-    if grep -qF -- "$needle" <<<"$2"; then fail "$1 shows ${needle}"; fi
+    if grep -qF -- "$needle" <<<"$2"; then fail "$1 shows ${role[$needle]}"; fi
   done
   echo "ok: $1 shows no secret"
 }
@@ -546,7 +598,7 @@ wait_for "$T_INCIDENT_OPEN" "pulse_heartbeat_missed_total is above 0" hb_metric_
 [[ -z "$(api /metrics | awk '$1 == "pulse_heartbeat_pings_total{check=\"heartbeat-e2e\"}" && $2 > 0')" ]] ||
   fail "pulse_heartbeat_pings_total is above 0 before a ping"
 echo "ok: pulse_heartbeat_pings_total is 0 before a ping"
-api /checks | grep -qF "$hb_secret" && fail "GET /checks shows the heartbeat secret"
+api /checks | grep -F "$hb_secret" >/dev/null && fail "GET /checks shows the heartbeat secret"
 echo "ok: the secret is absent from GET /checks"
 wait_for "$T_PAGE" "the status page lists the heartbeat check" hb_page_has_check
 [[ "$(hb_status -H 'Authorization: Bearer wrong-secret-0123456789' "http://127.0.0.1:${api_port}/heartbeat/heartbeat-e2e")" == "401" ]] ||
@@ -580,12 +632,11 @@ wait_for "$T_NOTIFY" "notify ledger has ${incident_id}:opened" notify_has "${inc
 wait_for "$T_NOTIFY" "notify ledger has ${incident_id}:resolved" notify_has "${incident_id}:resolved"
 
 step "Manual incidents"
-probe_token=$(head -n 1 "$secrets_dir/probe-token")
 body='{"title":"T","impact":"major","componentIds":["web"],"message":"m"}'
 [[ "$(manual_code POST /manual-incidents "$body" "")" == "401" ]] || fail "an unauthenticated write was not refused"
 probe_write=$(manual_code POST /manual-incidents "$body" "$probe_token")
-[[ "$probe_write" == "401" || "$probe_write" == "403" ]] || fail "a probe token write was not refused"
-echo "ok: writes without a token answer 401, with a probe token 401 or 403"
+[[ "$probe_write" == "403" ]] || fail "a probe token write was not refused with 403"
+echo "ok: a write without a token answers 401, a probe token write answers 403"
 [[ "$(manual_code POST /manual-incidents '{"title":"T","impact":"major","componentIds":["nope"],"message":"m"}' "$e2e_admin_token")" == "400" ]] ||
   fail "an unknown component was accepted"
 long_title=$(printf 'x%.0s' $(seq 1 201))
@@ -605,7 +656,7 @@ echo "manual incident: ${manual_id}"
 wait_for "$T_PAGE" "the status service serves the open manual incident (hide-details is on by default)" proxy_shows_open_manual
 wait_for "$T_PAGE" "the feed has manual:${manual_id}:0" feed_has "manual:${manual_id}:0"
 wait_for "$T_PAGE" "the feed escapes the title" feed_has "$escaped_title"
-if status_page /feed.atom | grep -qF '<script>alert(1)'; then fail "the feed holds unescaped HTML"; fi
+if status_page /feed.atom | grep -F '<script>alert(1)' >/dev/null; then fail "the feed holds unescaped HTML"; fi
 echo "ok: the feed holds no raw <script>"
 wait_for "$T_NOTIFY" "notify sent manual:${manual_id}:opened to the web channel" \
   manual_sent manual-web.jsonl "manual:${manual_id}:opened"
@@ -722,7 +773,7 @@ channel_text() { docker compose exec -T notify cat "/data/$1" 2>/dev/null || tru
 channel_lines_with() { channel_text "$1" | grep -cF -- "$2" || true; }
 
 proxy_lists() { proxy_manual | jq -e --argjson id "$1" 'any(.[]; .id == $id)'; }
-page_has() { status_page / | grep -qF -- "$1"; }
+page_has() { status_page / | grep -F -- "$1" >/dev/null; }
 
 proxy_shows_p_resolved() {
   proxy_manual | jq -e --argjson id "$p_id" --arg u "$priv_update" \
@@ -957,15 +1008,17 @@ cfg_etag() { # the current revision, quoted
     tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]: //p'
 }
 
-cfg_code() { # cfg_code <method> <path> [body]: send with the current revision; print the status
+# cfg_code <method> <path> [body] [token]: send with the current revision (read with the admin
+# token); print the status. The token defaults to the admin token.
+cfg_code() {
   local args=(-sS --max-time 5 -o /dev/null -w '%{http_code}' -X "$1"
-    -H "Authorization: Bearer ${e2e_admin_token}" -H "If-Match: $(cfg_etag)")
+    -H "Authorization: Bearer ${4:-$e2e_admin_token}" -H "If-Match: $(cfg_etag)")
   if [[ -n "${3:-}" ]]; then args+=(-H 'Content-Type: application/json' -d "$3"); fi
   curl "${args[@]}" "${cfg_url}$2"
 }
 
 check_has_result() { api "/checks/$1/results?limit=1" | jq -e 'length > 0'; }
-page_has_check_name() { status_page /api/checks | grep -qF -- "$1"; }
+page_has_check_name() { status_page /api/checks | grep -F -- "$1" >/dev/null; }
 page_lacks_check_name() { ! page_has_check_name "$1"; }
 
 cfg_get() { # GET /admin/config: the body
@@ -1247,6 +1300,102 @@ else
   echo "ok: runtime settings"
 fi
 
+# tok_call <method> <path> <token> [body]: set resp_code and resp_body. Never prints: token
+# responses hold secrets.
+tok_call() {
+  local args=(-s --max-time 5 -w '\n%{http_code}' -X "$1" -H "Authorization: Bearer $3") out
+  [[ -n "${4:-}" ]] && args+=(-H 'Content-Type: application/json' -d "$4")
+  out=$(curl "${args[@]}" "${cfg_url}$2") || true
+  resp_code=${out##*$'\n'}
+  resp_body=${out%$'\n'*}
+  [[ "$out" == *$'\n'* ]] || resp_body=""
+}
+
+create_ok_line() {
+  api /metrics | grep -F 'pulse_api_config_writes_total{kind="check",action="create",result="ok"}' || true
+}
+
+step "Tokens and audit"
+tok_call POST /admin/tokens "$e2e_admin_token" '{"name":"e2e-read-checks","scopes":["read","checks"]}'
+[[ "$resp_code" == "201" ]] || fail "POST /admin/tokens for e2e-read-checks did not answer 201"
+read_checks_secret=$(jq -er '.secret | strings' <<<"$resp_body") || fail "the e2e-read-checks response has no string secret"
+needle_add "$read_checks_secret" || true
+jq -e '.token.id | test("^tok_[0-9a-f]{24}$")' <<<"$resp_body" >/dev/null ||
+  fail "the e2e-read-checks token.id does not match ^tok_[0-9a-f]{24}$"
+create_before=$(create_ok_line)
+etag_before=$(cfg_etag)
+[[ "$(cfg_code POST /admin/checks '{"id":"e2e-scope-denied","name":"E2E scope denied","url":"http://api:3000/checks","intervalMs":10000,"timeoutMs":2000}' "$read_checks_secret")" == "403" ]] ||
+  fail "a check write with the read and checks scopes was not refused with 403"
+if has_check e2e-scope-denied; then fail "GET /checks lists e2e-scope-denied after the refused write"; fi
+[[ "$(cfg_etag)" == "$etag_before" ]] || fail "the config ETag changed after the refused write"
+[[ "$(create_ok_line)" == "$create_before" ]] || fail "the check create counter changed after the refused write"
+echo "ok: a token with read and checks gets 403 on a valid check write, and nothing changes"
+
+tok_call POST /admin/tokens "$e2e_admin_token" '{"name":"e2e-rotated","scopes":["probe"],"location":"e2e-rotated"}'
+[[ "$resp_code" == "201" ]] || fail "POST /admin/tokens for e2e-rotated did not answer 201"
+rotated_secret_a=$(jq -er '.secret | strings' <<<"$resp_body") || fail "the e2e-rotated response has no string secret"
+needle_add "$rotated_secret_a" || true
+rotated_id=$(jq -er '.token.id | strings | select(test("^tok_[0-9a-f]{24}$"))' <<<"$resp_body") ||
+  fail "the e2e-rotated token.id does not match ^tok_[0-9a-f]{24}$"
+[[ "$(hb_status -H "Authorization: Bearer ${rotated_secret_a}" "${cfg_url}/probe/checks")" == "200" ]] ||
+  fail "the rotated secret A did not get 200 on /probe/checks"
+tok_call POST "/admin/tokens/${rotated_id}/rotate" "$e2e_admin_token" '{}'
+[[ "$resp_code" == "200" ]] || fail "rotate of e2e-rotated did not answer 200"
+rotated_secret_b=$(jq -er '.secret | strings' <<<"$resp_body") || fail "the rotate response has no string secret"
+needle_add "$rotated_secret_b" || true
+[[ "$rotated_secret_b" != "$rotated_secret_a" ]] || fail "rotate returned the same secret"
+jq -e '.previousValidUntil | numbers' <<<"$resp_body" >/dev/null || fail "the rotate response has no numeric previousValidUntil"
+for role in A B; do
+  [[ "$role" == A ]] && secret=$rotated_secret_a || secret=$rotated_secret_b
+  [[ "$(hb_status -H "Authorization: Bearer ${secret}" "${cfg_url}/probe/checks")" == "200" ]] ||
+    fail "the rotated secret ${role} did not get 200 on /probe/checks during the overlap"
+done
+[[ "$(hb_status -H "Authorization: Bearer ${rotated_secret_b}" "${cfg_url}/admin/audit")" == "403" ]] ||
+  fail "the rotated secret B was not refused with 403 on /admin/audit"
+tok_call POST "/admin/tokens/${rotated_id}/revoke" "$e2e_admin_token"
+[[ "$resp_code" == "200" ]] || fail "revoke of e2e-rotated did not answer 200"
+for role in A B; do
+  [[ "$role" == A ]] && secret=$rotated_secret_a || secret=$rotated_secret_b
+  [[ "$(hb_status -H "Authorization: Bearer ${secret}" "${cfg_url}/probe/checks")" == "401" ]] ||
+    fail "the rotated secret ${role} did not get 401 on /probe/checks after revoke"
+done
+secret=""
+echo "ok: rotate keeps A and B valid in the overlap, B gets 403 on /admin/audit, revoke ends both with 401"
+
+tok_call GET '/admin/audit?action=check.create&targetId=e2e-api' "$e2e_admin_token"
+[[ "$resp_code" == "200" ]] || fail "GET /admin/audit for check.create did not answer 200"
+audit_check=$resp_body
+audit_id=$(jq -er '[.entries[] | select(.action == "check.create" and .target.kind == "check" and .target.id == "e2e-api" and .actor.name == "e2e")] | first.id // empty | tostring' <<<"$audit_check") ||
+  fail "the audit has no check.create entry for e2e-api by e2e"
+tok_call GET "/admin/audit?targetKind=token&targetId=${rotated_id}" "$e2e_admin_token"
+[[ "$resp_code" == "200" ]] || fail "GET /admin/audit for the rotated token did not answer 200"
+audit_token=$resp_body
+jq -e '[.entries[] | select(.actor.name == "e2e") | .action] as $a | all(("token.create", "token.rotate", "token.revoke"); . as $x | $a | index($x))' <<<"$audit_token" >/dev/null ||
+  fail "the token audit lacks token.create, token.rotate or token.revoke by e2e"
+echo "ok: the audit query shows check.create of e2e-api and the token lifecycle, each by e2e"
+
+tok_call GET /admin/audit/export "$e2e_admin_token"
+[[ "$resp_code" == "200" ]] || fail "GET /admin/audit/export did not answer 200"
+audit_export=$resp_body
+[[ -n "$audit_export" ]] || fail "the audit export is empty"
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  jq -e 'type == "object"' <<<"$line" >/dev/null 2>&1 || fail "an audit export line is not one JSON object"
+done <<<"$audit_export"
+jq -e --arg id "$audit_id" 'select((.id | tostring) == $id)' <<<"$audit_export" >/dev/null ||
+  fail "the audit export lacks the check.create entry"
+echo "ok: the audit export is one JSON object per line and holds the check.create entry"
+
+secret_absent "the check.create audit query" "$audit_check"
+secret_absent "the token audit query" "$audit_token"
+secret_absent "the audit export" "$audit_export"
+secret_absent "the container logs" "$(docker compose logs --no-color)"
+
+if api /metrics | awk '$1 ~ /^pulse_api_admin_auth_throttled_total([{]|$)/ && $2 > 0 { found = 1 } END { exit !found }'; then
+  fail "pulse_api_admin_auth_throttled_total is above 0"
+fi
+echo "ok: no admin auth throttle"
+
 step "Persistence across down and up"
 docker compose down
 assert_volume api-data
@@ -1263,6 +1412,15 @@ if ((db_checks == 1)); then
   db_check_listed e2e-db-keep >/dev/null || fail "GET /admin/config does not show e2e-db-keep with source database"
   echo "ok: e2e-db-keep persists with source database"
 fi
+[[ "$(hb_status -H "Authorization: Bearer ${e2e_admin_token}" "${cfg_url}/admin/config")" == "200" ]] ||
+  fail "the e2e admin token did not get 200 on /admin/config after up"
+echo "ok: the e2e admin token persists"
+tok_call GET '/admin/audit?action=check.create&targetId=e2e-api' "$e2e_admin_token"
+[[ "$resp_code" == "200" ]] || fail "GET /admin/audit for check.create did not answer 200 after up"
+jq -e --arg id "$audit_id" '.entries | any((.id | tostring) == $id)' <<<"$resp_body" >/dev/null ||
+  fail "the check.create audit entry is gone after up"
+echo "ok: the check.create audit entry persists"
+secret_absent "the container logs after up" "$(docker compose logs --no-color)"
 
 step "Clean stop"
 # docker stop sends SIGTERM and kills after the timeout: exit 0 means the service stopped by itself.
